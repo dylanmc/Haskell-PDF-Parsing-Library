@@ -1,0 +1,47 @@
+name: PDFLibrary
+version: 0.1
+Synopsis: Build and manipulate Adobe PDF documents.
+Description:
+   The PDFLibrary package lets you process PDF documents in Haskell.
+   It includes a parser and pretty printer, along with an abstract
+   representation of PDFs letting you either manipulate input documents
+   or construct new PDFs programmatically.
+category      : Text
+license       : BSD3
+license-file  : LICENSE
+author        : Dylan McNamee <dylan@galois.com>
+maintainer    : dylan@galois.com
+cabal-version :  >= 1.2
+build-type    : Simple
+--Not yet:
+extra-source-files:   Main.hs
+--                    README
+--                    examples/Rotate.hs 
+                      
+
+flag new-base
+  Description: Build with new smaller base library
+  Default: False
+
+library
+ Exposed-modules: Text.PDF.Types,
+                  Text.PDF.Parser,
+                  Text.PDF.Document,
+                  Text.PDF.Utils
+ Ghc-Options:     -Wall
+
+ build-depends: base, parsec, containers, array, mtl
+ if flag(new-base)
+   Build-Depends: base >= 3
+ else
+   Build-Depends: base < 3
+
+executable main {
+  main-is:              Main.hs
+  ghc-options:          -Wall
+}
+
+--executable rotatePages {
+--  main-is:              examples/Rotate.hs
+--  ghc-options:          -Wall
+--}
