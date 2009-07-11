@@ -2,7 +2,7 @@
 -- |
 -- Module      : Text.PDF.Utils
 -- Description : Functions for manipulating PDF content.
--- Copyright   : (c) Dylan McNamee, 2008
+-- Copyright   : (c) Dylan McNamee, 2008, 2009
 -- License     : BSD3
 --
 -- Maintainer: Dylan McNamee <dylan@galois.com>
@@ -128,3 +128,9 @@ escapeString (c:cs) = case c of
     ')' -> ('\\' : (c : escapeString cs))
     '\\' -> ('\\' : (c : escapeString cs))
     _ -> (c : escapeString cs)
+
+padTo, padTo' :: String -> Int -> String
+padTo a n = padTo' a (n - (length a))
+
+padTo' a 0 = a
+padTo' a n = ('0' : padTo' a (n - 1)) -- todo: catch the case n < 0

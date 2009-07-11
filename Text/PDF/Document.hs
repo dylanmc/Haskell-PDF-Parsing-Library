@@ -2,7 +2,7 @@
 -- |
 -- Module      : Text.PDF.Document
 -- Description : Functions for manipulating PDF content.
--- Copyright   : (c) Dylan McNamee, 2008
+-- Copyright   : (c) Dylan McNamee, 2008, 2009
 -- License     : BSD3
 --
 -- Maintainer: Dylan McNamee <dylan@galois.com>
@@ -14,7 +14,7 @@
 module Text.PDF.Document where
 
 import Data.Map as Map
-import Debug.Trace(trace)
+import Debug.Trace
 import Data.Array as Array
 import qualified Control.Monad.State as State
 import Data.Maybe
@@ -39,22 +39,16 @@ printXRefIndexes h (ix:ixs) n = do
     hPutStrLn h ((padTo (show ix) 10) ++ " 00000 n ")
     printXRefIndexes h ixs (n + 1)
 
-padTo, padTo' :: String -> Int -> String
-padTo a n = padTo' a (n - (length a))
-
-padTo' a 0 = a
-padTo' a n = ('0' : padTo' a (n - 1)) -- todo: catch the case n < 0
-
 printTrailer :: Handle -> PDFObject -> Int -> Int -> IO ()
 printTrailer h rootRef numObjects currIx = do
-    hPutStrLn h ("trailer")
-    hPutStrLn h (showPDFObject ((trailerObj numObjects) rootRef ))
-    hPutStrLn h ("startxref\n" ++ (show (currIx)))
-    hPutStrLn h ("%%EOF")
+        hPutStrLn h ("trailer") 
+        hPutStrLn h (showPDFObject ((trailerObj numObjects) rootRef ))
+        hPutStrLn h ("startxref\n" ++ (show (currIx)))
+        hPutStrLn h ("%%EOF")
     where
         trailerObj n rootR = PDFDict 
             (fromList [((PDFKey "Root"), rootR), 
-                        ((PDFKey "Size"), (PDFInt n))])
+                       ((PDFKey "Size"), (PDFInt n))])
 
 -- XXX TODO: if the last arg is a dict, and not a dictRef, do addObject dance
 newPageRaw :: PDFObject -> PDFObject -> PDFObject -> PDFObject -> PDFObject
@@ -262,7 +256,7 @@ buildPageTree :: PDFDocument -> [PDFObject] -> PDFDocument
 buildPageTree doc pagesArray = doc'''' where
     (newPagesArray, doc') = buildArrayOfRefs pagesArray parentRef doc
     (parentRef, doc'') = addObjectGetRef (pageTreeFromArray newPagesArray) doc'
-    (pagesArrayRef, doc''') = addObjectGetRef (PDFArray newPagesArray) doc''
+    (_pagesArrayRef, doc''') = addObjectGetRef (PDFArray newPagesArray) doc''
     doc'''' = doc''' { 
         catalogDict = pageTreeNode parentRef PDFNull 
     }
@@ -298,9 +292,9 @@ printString s = do
     putPDF (myState {streamAccum = ns})
 
 setFont :: String -> Int -> PDF ()
-setFont name size = do
+setFont name fontSize = do
     myState <- State.get
-    let s' = appendStream (streamAccum myState) ("/" ++ name ++ " " ++ (show size) ++ " Tf")
+    let s' = appendStream (streamAccum myState) ("/" ++ name ++ " " ++ (show fontSize) ++ " Tf")
     let dict' = addFontToDict name name (rsrcDict myState)
     let myState' = myState {
         streamAccum = s',
@@ -320,22 +314,22 @@ printPDFDocument h d = do
 
 -- empties the PDFObjectList, printing each object as we go, adding
 -- its offset in the output file to "ObjectIndices"
+printPDFDocument' :: Handle -> PDFDocument -> ObjectIndices -> Int-> IO PDFDocument
 printPDFDocument' 
         h
         (PDFDocument _a (o:os) )
         (ObjectIndices ixs)  
         currIx = do
-    let objNum = length ixs
-    let prefixStr = (show (1 + objNum)) ++ " 0 obj\n"
-    let str = showPDFObject (o)
-    let postFixStr = "\nendobj\n"
-    let newIx = currIx + length str + length prefixStr + length postFixStr
-    hPutStr h (prefixStr)
-    hPutStr h (str)
-    hPutStr h (postFixStr)
-    ret <- printPDFDocument' h (PDFDocument _a os )
-                (ObjectIndices (ixs ++ [currIx])) newIx
-    return ret
+            let objNum = length ixs
+            let prefixStr = (show (1 + objNum)) ++ " 0 obj\n"
+            let str = showPDFObject (o)
+            let postFixStr = "\nendobj\n"
+            let newIx = currIx + length str + length prefixStr + length postFixStr
+            hPutStr h (prefixStr)
+            hPutStr h (str)
+            hPutStr h (postFixStr)
+            ret <- printPDFDocument' h (PDFDocument _a os ) (ObjectIndices (ixs ++ [currIx])) newIx
+            return ret
 
 -- empty PDFObjectList -> transition from printing objects to 
 -- printing the xref table, which is the list of object indices
@@ -346,7 +340,7 @@ printPDFDocument'
         (PDFDocument rootRef [] )
         (ObjectIndices (ixs)) 
         currIx = do
-    printXRefIndexes h ixs 0
-    let numObjects = 1 + length ixs
-    printTrailer h rootRef numObjects currIx 
-    return (PDFDocument rootRef [] ) 
+            printXRefIndexes h ixs 0
+            let numObjects = 1 + length ixs
+            printTrailer h rootRef numObjects currIx 
+            return (PDFDocument rootRef [] ) 

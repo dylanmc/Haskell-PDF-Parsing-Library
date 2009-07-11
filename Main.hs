@@ -1,5 +1,6 @@
 module Main(main) where
 
+import Text.PDF.Types
 import Text.PDF.Document
 import Text.PDF.Parser ( digestDocument, flattenDocument )
 import Text.PDF.Utils
@@ -9,11 +10,12 @@ import System.Environment
 import Debug.Trace
 
 -- test the monadic document creation code
-main = main3 "/Users/dylanjames/Desktop/foo.pdf"
+main = main2 "/Users/dylanjames/Desktop/foo.pdf"
 
 main :: IO ()
 
-mainX = do
+_mainX :: IO ()
+_mainX = do
     putTraceMsg "1"
     let d = buildDoc
     putTraceMsg ("2")
@@ -27,6 +29,7 @@ mainX = do
     let d'' = flattenDocument d'
     putTraceMsg ("6 " ++ (show d''))
     printPDFDocument stdout d'' 
+    hClose outFile
     return ()
 
 main2 :: String -> IO ()
@@ -36,15 +39,18 @@ main2 outName = do
     let d' = rotateDocument dp 90
     outFile <- openFile outName WriteMode
     printPDFDocument outFile (flattenDocument d')
+    hClose outFile
     return ()
 
-main3 :: String -> IO ()
-main3 outName = do
+_main3 :: String -> IO ()
+_main3 outName = do
     let d = buildDoc
     outFile <- openFile outName WriteMode
     printPDFDocument outFile d
+    hClose outFile
     return ()
 
+buildDoc :: PDFDocument
 buildDoc = rundoc $ do
         beginPage 
         moveTo 100 500

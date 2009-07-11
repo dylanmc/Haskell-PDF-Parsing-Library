@@ -2,7 +2,7 @@
 -- |
 -- Module      : Text.PDF.Parser
 -- Description : Reading in and parsing PDF documents
--- Copyright   : (c) Dylan McNamee, 2008
+-- Copyright   : (c) Dylan McNamee, 2008, 2009
 -- License     : BSD3
 --
 -- Maintainer: Dylan McNamee <dylan@galois.com>
