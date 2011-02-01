@@ -19,14 +19,55 @@ import Text.Read as Read
 import Data.Map as Map
 import Data.Char as Char
 import Data.Array as Array
+import Data.Maybe
 
 import Text.PDF.Types
 import Text.PDF.Utils
+
+import Debug.Trace
 
 type ObjNum = Int
 type FileIndex = Int
 
 data PDFContents = PDFContents String deriving (Show)
+
+-- From 30,000 feet, Parsing a PDF file goes like this:
+--  * find the xref table 
+--  o turn the xref table into a map from integers to PDF Objects
+--  o find and parse the trailer dictionary
+--  o use the trailer dictinoary to find and parse the page tree
+--  o use the page tree to build a list of pages
+--  o for each page, parse it into a PDFPage structure
+parsePDF :: PDFContents -> PDFDocument
+parsePDF contents = PDFDocument {
+        catalogDict = rootObject,                               -- the catalog dictionary
+        objectList = Prelude.map parseObject' objectStrings     -- objectNum -> PDFObject
+    } where
+        (xrefEntries, rootObject) = getXRefTable contents
+        objectStrings = Prelude.map getObjectString' [1..(Map.size xrefEntries)]
+        getObjectString' = getObjectString contents xrefEntries
+        parseObject' objStr = case (parse topLevelObject "" objStr) of
+            Left err -> error ("malformed top-level PDF object: *** " ++ objStr ++ "ERR:" ++ (show err) ++ "***\n")
+            Right obj -> obj
+
+
+{-
+do
+    putStrLn $ "xref: " ++ ( show xrefEntries)
+    putStrLn $ "object strings:" ++ (show objectStrings)
+    return 
+        getObjectString' objStr = case (parse topLevelObject "" objStr) of
+            Left _ -> error ("malformed top-level PDF object" ++ objStr)
+            Right obj -> obj
+-}
+        -- objectString = getObjectString contents xrefEntries 2
+        -- leftoff first get object strings THEN parse each one
+        
+{-
+        (stringMap, rootObject) = trace "parsePDF:" (getXRefTable (PDFContents clx))
+        stringList = undefined -- trace (show (getObjectString (PDFContents clx) stringMap) 2) error "blah"
+        objects = trace (show (getObjectString (PDFContents clx) stringMap 2)) error "haven't finished parsePDF" -- map (1 .. numObjects) getObjectString stringMap (PDFContents clx)
+-}
 
 digestDocument :: PDFDocument -> PDFDocumentParsed
 digestDocument inDoc = PDFDocumentParsed {
@@ -55,7 +96,6 @@ flattenPage pp = PDFDict pageDict where
 
 extractGlobals :: PDFDocument -> PDFGlobals
 extractGlobals d = PDFGlobals {
-        rootObject = myRoot
     } where 
         myRoot = PDFString "todo: extract globals" -- error "todo: extract globals"
 
@@ -70,6 +110,7 @@ getDocumentPages d g = pages where
     root = case Map.lookup (PDFKey "Pages") catalog of
         Nothing                   -> error "missing root in catalog dictionary"
         Just (PDFReference r gen) -> traversePDFReference (PDFReference r gen) d
+        _                         -> error "malformed catalog dictionary"
     pages = flattenPageTree d root
     
 -- pageTrees are arrays of either pages, or arrays of pages
@@ -104,8 +145,8 @@ parsePage doc (PDFDict d) = PDFPageParsed {
             Nothing -> Map.empty -- crawl up page tree in this case?
             Just (PDFDict r) -> r 
             Just (PDFReference r g) -> case (traversePDFReference (PDFReference r g) doc) of 
-                (PDFDict r) -> r
-                _           -> error (" parsePage found a not-dictionary ")
+                (PDFDict r') -> r'
+                _            -> error (" parsePage found a not-dictionary ")
             _ -> error ("bad resources in parsePage" ++ (show d))
         contentsObject = case Map.lookup (PDFKey "Contents") d of 
             Nothing -> PDFNull
@@ -115,10 +156,39 @@ parsePage doc (PDFDict d) = PDFPageParsed {
             Just (PDFDict f) -> f
             _ -> error "bad font in parsePage"
 
-            
 parsePage doc (PDFPageRaw pr) = parsePage doc pr
-
 parsePage _ p = error ("internal error: parsePage called on non-dict" ++ (show p))
+
+getPageTree :: PDFDocument -> PDFObject
+getPageTree d = traversePDFReference (getPageTreeRef d) d
+-- getPageTreeRef :: PDFDocument -> PDFObject
+getPageTreeRef (PDFDocument catalogDictRef objList ) = pageTreeRef where
+    catalogDictMap = case (traversePDFReference catalogDictRef 
+                            (PDFDocument undefined objList )) of
+        (PDFDict dict)  -> dict
+        foo             -> fromList ([((PDFKey "error"), foo)])
+    pageTreeRef = fromMaybe (PDFError (show catalogDictMap)) 
+                            (Map.lookup (PDFKey "Pages") catalogDictMap)
+
+-- getPage pageTree n returns the nth PDFPage object in the document
+getPage :: PDFObject -> Int -> Maybe PDFObject
+getPage (PDFArray []) _ = undefined -- signal an error
+getPage (PDFArray (treeNode:restNodes))  n = 
+   case (dictLookup "Type" treeNode "bad type in getPage")  of
+     (PDFSymbol "Page")
+          | n == 0    -> Just treeNode
+          | otherwise -> getPage (PDFArray restNodes) (n-1)
+     (PDFSymbol "Pages")   ->
+          case (dictLookup "Kids" treeNode "no children array in node") of
+            (PDFArray childArray) ->
+              case (dictLookup "Count" treeNode "invalid Pages node (no count)") of
+                (PDFInt countPages) 
+                  | n < countPages  -> getPage (PDFArray childArray) (countPages - n) -- go deeper
+                  | otherwise       -> getPage (PDFArray restNodes) (n - countPages) -- skip this node
+                _ -> Nothing -- "bad count in page tree"
+            _ -> Nothing -- "missing child array in page tree"
+     _ -> Nothing -- "bad Dict type in getPage"
+getPage _ _ = error "unexpected page structure"
 
 -- later:
 -- getObject :: PDFDocument -> Int -> PDFObject
@@ -133,7 +203,220 @@ findXRefOffset (first:butFirst)
                 | True = (findXRefOffset butFirst)
 findXRefOffset [] = 0 -- notreached?
 
--- 
+-- parser functions
+run :: Show a => Parser a -> String -> IO ()
+run p input
+        = case (parse p "" input) of
+            Left err -> do
+                        putStr "parse error at "
+                        print err
+            Right x  -> print x
+
+whiteSpace :: Parser String
+whiteSpace = many space
+
+charLex :: Parser Char
+charLex = do
+            _ <- whiteSpace
+            c <- anyChar
+            return c
+
+toInt :: PDFObject -> Int
+toInt (PDFInt iv) = iv 
+toInt _ = error "toInt on non-numeric PDF object"
+
+topLevelObject :: Parser PDFObject
+topLevelObject =  do
+    objNum <- intLex
+    genNum <- intLex
+    _ <- whiteSpace
+    _ <- string "obj"
+    _ <- whiteSpace
+    ret <- pdfObject
+    _ <- whiteSpace
+    _ <- string "endobj"
+    return ret        
+              
+pdfObject :: Parser PDFObject
+pdfObject = try pdfStream 
+    <|>
+            pdfDict
+    <|>        
+            pdfString
+    <|>
+            pdfReference
+    <|>
+            pdfSymbol
+    <|>
+            pdfArray
+    <|>
+            pdfInt
+
+-- parse a PDF reference which is two ints (objNum, generation) followed by an R by itself
+pdfReference :: Parser PDFObject
+pdfReference = try ( do
+                objNum <- intLex
+                genNum <- intLex
+                _ <- whiteSpace
+                _ <- char 'R'
+                _ <- whiteSpace
+                let ret = PDFReference (read objNum) (read genNum)
+                return ret)
+
+intLex :: Parser String
+intLex = do
+            _ <- whiteSpace
+            cs <- many1 digit
+            return cs
+
+pdfInt :: Parser PDFObject
+pdfInt = do
+        ret <- intLex
+        return $ PDFInt $ read ret
+     
+pdfToken :: Parser String
+pdfToken = do
+                 c <- letter
+                 cs <- many (letter <|> digit <|> char '-' <|> char '_' )
+                 return (c:cs)
+                        
+pdfSymbol :: Parser PDFObject
+pdfSymbol =  do 
+                    _ <- whiteSpace
+                    _ <- char '/'
+                    str <- pdfToken
+                    let ret = PDFSymbol str
+                    return ret
+                 
+pdfKey :: Parser PDFKey
+pdfKey = do 
+                 _ <- whiteSpace
+                 _ <- char '/'
+                 str <- pdfToken
+                 return $ PDFKey str
+
+top :: Parser p -> Parser p 
+top p = do
+            _ <- many space
+            ret <- p
+            eof
+            return ret
+
+pdfString :: Parser PDFObject
+pdfString = do
+            _ <- whiteSpace
+            _ <- char '('
+            cs <- many stringChar
+            _ <- char ')'
+            return $ PDFString $ concat cs
+            
+stringChar :: Parser String
+stringChar =    (do 
+                    ret <- noneOf ['\\', ')'] 
+                    return [ret] )
+            <|> 
+                (do 
+                    _ <- char '\\' 
+                    ret <- anyChar
+                    return ['\\',ret])
+
+pdfDict :: Parser PDFObject
+pdfDict = do
+            trace "startDict" whiteSpace -- printf debugging here...
+            _ <- string "<<"
+            retList <- many1 keyValuePair
+            _ <- string ">>"
+            let ret = PDFDict (fromList retList)
+            trace ("doneDict" ++ show ret) whiteSpace
+            return ret
+
+replicateM :: Int -> Parser a -> Parser [a]
+replicateM count parser = loop count
+    where
+    loop i | i <= 0 = return []
+           | otherwise = do
+                a <- parser
+                rest <- loop (i-1) 
+                return (a : rest)
+{-
+replicateM i parser = sequence (replicate i parser)
+-}
+            
+pdfStream :: Parser PDFObject
+pdfStream = do
+            -- _ <- pdfDict
+            PDFDict lengthDict <- pdfDict
+            length <- case Map.lookup (PDFKey "Length") lengthDict of
+                Just (PDFInt i) -> return i
+                Just _ -> fail "non-integer value for Length in a PDF Stream"
+                _ -> fail "attempted to parse Stream, couldn't find Length"
+            _ <- string "stream"
+            _ <- newline
+            body <- replicateM length anyChar
+            _ <- newline
+            string "endstream"
+            -- need to slurp the next <length> bytes
+            -- body <- many anyChar -- or could use the value from lengthDict
+            -- nice try but no go: body <- anyChar `endBy` string "endstream" -- or could use the value from lengthDict
+            -- thanks Trevor! (not: _ <- string "endstream"
+            return $ PDFStream $  body 
+
+
+            
+keyValuePair :: Parser (PDFKey, PDFObject)
+keyValuePair =  do
+            _ <- whiteSpace
+            ret <- pdfKey
+            trace ("key: " ++ (show ret)) whiteSpace
+            -- _ <- whiteSpace
+            ret' <- pdfObject
+            trace ("value: " ++ (show ret')) whiteSpace
+            -- _ <- whiteSpace
+            return (ret, ret')
+
+valueWhitespacePair :: Parser PDFObject
+valueWhitespacePair = do
+            ret <- pdfObject
+            _ <- whiteSpace
+            return ret
+            
+pdfArray :: Parser PDFObject
+pdfArray = do
+            -- trace "array0" 
+            _ <- char '['
+            _ <- whiteSpace
+            ret <-  many valueWhitespacePair
+            _ <- char ']'
+            _ <- whiteSpace
+            return $ PDFArray ret
+
+-- Read the XRef table from the PDFContents. This table maps 
+--   integer object indices to the byte offset of the n'th PDF Object in the document
+-- TODO: fill in the root object
+getXRefTable :: PDFContents -> (Map ObjNum FileIndex, PDFObject) -- returns the trailer dict and the Root Object
+getXRefTable (PDFContents clx) = (readXRefTable 1 restStr'' numObjs Map.empty, rootObject) where
+    (_, lastFewLines) = splitAt trailerGuess $ lines clx
+    xrefOffset = findXRefOffset $ lastFewLines
+    fileLen = length $ clx
+    fileByteArray = listArray (0,fileLen-1) clx
+    xrefTableString = arrayToList (xrefOffset, fileLen - xrefOffset) fileByteArray
+    skipXref = skipLine xrefTableString
+    (skipZero, restStr) = parseNum skipXref 0
+    (numObjs, restStr') = parseNum restStr 0
+    restStr'' = skipLine restStr'
+    trailerGuess = 40
+    rootObject = PDFString (show lastFewLines )
+    
+-- Laboriously extracts nth object's string from a PDF file
+-- There are many better ways to do this, but this exercises a lot of the above code...
+getObjectString :: PDFContents -> Map ObjNum FileIndex -> Int -> String
+getObjectString (PDFContents clx) stringMap objNum = do
+    let fileLen = length $ clx
+    let fileByteArray = listArray (0,fileLen-1) clx
+    case Map.lookup objNum stringMap of
+      Nothing -> error ("getObjectString: unbound object number " ++ show objNum)
+      Just objOffset -> arrayToList (objOffset, fileLen - objOffset) fileByteArray
+
 readXRefTable :: ObjNum -> String -> Int -> Map ObjNum FileIndex -> Map ObjNum FileIndex
 readXRefTable _ [] _ inMap = inMap
 readXRefTable objNum tableString numObjs inMap  
@@ -157,209 +440,4 @@ parseNum (c : cs) numSoFar
                 | isSpace c = (numSoFar, cs)
                 | isDigit c = parseNum cs (numSoFar * 10 + (digitToInt c))
                 | True = (numSoFar, cs)
-
--- parser functions
-run :: Show a => Parser a -> String -> IO ()
-run p input
-        = case (parse p "" input) of
-            Left err -> do
-                        putStr "parse error at "
-                        print err
-            Right x  -> print x
-
-whiteSpace :: Parser String
-whiteSpace = many space
-
-charLex :: Parser Char
-charLex = do
-            whiteSpace
-            c <- anyChar
-            return c
-
-toInt :: PDFObject -> Int
-toInt (PDFInt iv) = iv 
-toInt _ = error "toInt on non-numeric PDF object"
-
-topLevelObject :: Parser PDFObject
-topLevelObject = try ( do
-    objNum <- intLex
-    genNum <- intLex
-    whiteSpace
-    string "obj"
-    whiteSpace
-    ret <- pdfObject
-    whiteSpace
-    string "endobj"
-    return ret
-    )         
-              
-pdfObject :: Parser PDFObject
-pdfObject = pdfStream
-    <|>
-            pdfDict
-    <|>        
-            pdfString
-    <|>
-            pdfReference
-    <|>
-            pdfSymbol
-    <|>
-            pdfArray
-    <|>
-            pdfInt
-
--- parse a PDF reference which is two ints (objNum, generation) followed by an R by itself
-pdfReference :: Parser PDFObject
-pdfReference = try ( do
-                objNum <- intLex
-                genNum <- intLex
-                whiteSpace
-                testChar <- char 'R'
-                many1 space
-                let ret = PDFReference (read objNum) (read genNum)
-                return ret)
-
-intLex :: Parser String
-intLex = do
-            whiteSpace
-            cs <- many1 digit
-            return cs
-
-pdfInt :: Parser PDFObject
-pdfInt = do
-        ret <- intLex
-        return $ PDFInt $ read ret
-        
-pdfSymbol :: Parser PDFObject
-pdfSymbol = try (  do 
-                    whiteSpace
-                    char '/'
-                    c <- letter
-                    cs <- many (letter <|> digit)
-                    let ret = PDFSymbol (c:cs)
-                    return ret
-                 )
-                 
-pdfKey :: Parser PDFKey
-pdfKey = try (  do 
-                 whiteSpace
-                 char '/'
-                 c <- letter
-                 cs <- many (letter <|> digit)
-                 return (PDFKey (c:cs))
-              )
-
-top :: Parser p -> Parser p 
-top p = do
-            many space
-            ret <- p
-            eof
-            return ret
-
-pdfString :: Parser PDFObject
-pdfString = (do
-            whiteSpace
-            char '('
-            cs <- many stringChar
-            char ')'
-            return $ PDFString $ concat cs)
-            
-stringChar :: Parser String
-stringChar =    (do 
-                    ret <- noneOf ['\\', ')'] 
-                    return [ret] )
-            <|> 
-                (do 
-                    char '\\' 
-                    ret <- anyChar
-                    return ['\\',ret])
-
-pdfDict :: Parser PDFObject
-pdfDict = try (do
-            -- trace "startDict" whiteSpace -- printf debugging here...
-            string "<<"
-            retList <- many keyValuePair
-            string ">>"
-            let ret = PDFDict (fromList retList)
-            -- trace "doneDict" whiteSpace
-            return ret)
-
-pdfStreamLen :: Int -> String -> Parser PDFObject
-pdfStreamLen 0 completeString = do
-            return $ PDFStream completeString
-            
-pdfStreamLen countRemain stringSofar = try ( do
-            char <- anyChar
-            ret <- pdfStreamLen (countRemain - 1) (char : stringSofar)
-            return ret)
-            
-pdfStream :: Parser PDFObject
-pdfStream = try (do
-            lengthDict <- pdfDict
-            string "stream"
-            -- need to slurp the next <length> bytes
-            body <- many anyChar
-            string "endstream"
-            return $ PDFStream $  body 
-            )
-            
-keyValuePair :: Parser (PDFKey, PDFObject)
-keyValuePair =  do
-            whiteSpace
-            ret <- pdfKey
-            -- trace ("key: " ++ (show ret)) whiteSpace
-            whiteSpace
-            ret' <- pdfObject
-            -- trace ("value: " ++ (show ret')) whiteSpace
-            whiteSpace
-            return (ret, ret')
-
-valueWhitespacePair :: Parser PDFObject
-valueWhitespacePair = do
-            ret <- pdfObject
-            whiteSpace
-            return ret
-            
-pdfArray :: Parser PDFObject
-pdfArray = do
-            -- trace "array0" 
-            char '['
-            whiteSpace
-            ret <-  many valueWhitespacePair
-            char ']'
-            whiteSpace
-            return $ PDFArray ret
-
-getXRefTable :: PDFContents -> Map ObjNum FileIndex
-getXRefTable (PDFContents clx) = readXRefTable 1 restStr'' numObjs Map.empty where
-    xrefOffset = findXRefOffset $ lines clx
-    fileLen = length $ clx
-    fileByteArray = listArray (0,fileLen-1) clx
-    xrefTableString = arrayToList (xrefOffset, fileLen - xrefOffset) fileByteArray
-    skipXref = skipLine xrefTableString
-    (skipZero, restStr) = parseNum skipXref 0
-    (numObjs, restStr') = parseNum restStr 0
-    restStr'' = skipLine restStr'
-    
--- Laboriously extracts nth object's string from a PDF file
--- There are many better ways to do this, but this exercises a lot of the above code...
-getObjectString :: PDFContents -> Int -> String
-getObjectString (PDFContents clx) objNum = do
-    let fileLen = length $ clx
-    let fileByteArray = listArray (0,fileLen-1) clx
-    let retMap = getXRefTable (PDFContents clx)
-    case Map.lookup objNum retMap of
-      Nothing -> error ("getObjectString: unbound object number " ++ show objNum)
-      Just objOffset -> arrayToList (objOffset, fileLen - objOffset) fileByteArray
-
-
-parsePDF :: PDFContents -> PDFDocument
-parsePDF (PDFContents clx) = PDFDocument {
-        catalogDict = rootObject,    -- the catalog dictionary
-        objectList = objects         -- objectNum -> PDFObject
-    } where
-        stringMap = getXRefTable (PDFContents clx)
-        rootObject = error "haven't finished parsePDF"
-        objects = error "haven't finished parsePDF" -- map (1 .. numObjects) getObjectString (PDFContents clx)
-
 

@@ -2,64 +2,41 @@ module Main(main) where
 
 import Text.PDF.Types
 import Text.PDF.Document
-import Text.PDF.Parser ( digestDocument, flattenDocument )
-import Text.PDF.Utils
+import Text.PDF.Parser
 import System.IO
-import System.Environment
-
-import Debug.Trace
-
--- test the monadic document creation code
-main = main2 "/Users/dylanjames/Desktop/foo.pdf"
-
+ 
 main :: IO ()
+-- main = buildAndWriteFile "foo.pdf"
+main = parseAndWriteFile "foo.pdf" "bar.pdf"
 
-_mainX :: IO ()
-_mainX = do
-    putTraceMsg "1"
-    let d = buildDoc
-    putTraceMsg ("2")
-    let dp = digestDocument d
-    putTraceMsg ("3 " ++ (show dp))
-    let d' = rotateDocument dp 90
-    putTraceMsg "4"
-    args <- getArgs
-    outFile <- openFile (head args) WriteMode
-    putTraceMsg ("5 " ++ (show d'))
-    let d'' = flattenDocument d'
-    putTraceMsg ("6 " ++ (show d''))
-    printPDFDocument stdout d'' 
-    hClose outFile
-    return ()
-
-main2 :: String -> IO ()
-main2 outName = do
-    let d = buildDoc
-    let dp = digestDocument d
-    let d' = rotateDocument dp 90
-    outFile <- openFile outName WriteMode
-    printPDFDocument outFile (flattenDocument d')
-    hClose outFile
-    return ()
-
-_main3 :: String -> IO ()
-_main3 outName = do
+buildAndWriteFile :: String -> IO ()
+buildAndWriteFile outName = do
     let d = buildDoc
     outFile <- openFile outName WriteMode
-    printPDFDocument outFile d
+    _ <- printPDFDocument outFile d
     hClose outFile
     return ()
 
 buildDoc :: PDFDocument
 buildDoc = rundoc $ do
-        beginPage 
-        moveTo 100 500
-        setFont "Helvetica" 24
-        printString "Hello World"
-        endPage
-        beginPage
-        moveTo 100 100
-        setFont "Times-Roman" 24
-        printString "Goodbye World"
-        endPage
-        endDocument
+    beginPage 
+    moveTo 100 500
+    setFont "Helvetica" 24
+    printString "Hello World"
+    endPage
+    beginPage
+    moveTo 100 500
+    setFont "Times-Roman" 24
+    printString "Goodbye World"
+    endPage
+    endDocument
+
+parseAndWriteFile :: String -> String -> IO ()
+parseAndWriteFile inName outName = do
+    -- inFileHandle <- openFile inName ReadMode
+    inString <- readFile inName
+    let contents = PDFContents inString
+    let parsed = parsePDF contents
+    putStrLn (show parsed)
+
+        

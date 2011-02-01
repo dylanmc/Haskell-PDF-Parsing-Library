@@ -14,13 +14,10 @@
 module Text.PDF.Document where
 
 import Data.Map as Map
-import Debug.Trace
-import Data.Array as Array
 import qualified Control.Monad.State as State
-import Data.Maybe
 import Text.PDF.Types
 import Text.PDF.Utils
-import Text.PDF.Parser
+-- import Text.PDF.Parser
 import System.IO
 
 header14 :: String
@@ -62,35 +59,6 @@ newPageRaw stream mediaBox parentRef rscDict =
             ((PDFKey "Parent"), parentRef)
         ] ))
 
-getPageTree :: PDFDocument -> PDFObject
-getPageTree d = traversePDFReference (getPageTreeRef d) d
--- getPageTreeRef :: PDFDocument -> PDFObject
-getPageTreeRef (PDFDocument catalogDictRef objList ) = pageTreeRef where
-    catalogDictMap = case (traversePDFReference catalogDictRef 
-                            (PDFDocument undefined objList )) of
-        (PDFDict dict)  -> dict
-        foo             -> fromList ([((PDFKey "error"), foo)])
-    pageTreeRef = fromMaybe (PDFError (show catalogDictMap)) 
-                            (Map.lookup (PDFKey "Pages") catalogDictMap)
-
--- getPage pageTree n returns the nth PDFPage object in the document
-getPage :: PDFObject -> Int -> Maybe PDFObject
-getPage (PDFArray []) _ = undefined -- signal an error
-getPage (PDFArray (treeNode:restNodes))  n = 
-   case (dictLookup "Type" treeNode "bad type in getPage")  of
-     (PDFSymbol "Page")
-          | n == 0    -> Just treeNode
-          | otherwise -> getPage (PDFArray restNodes) (n-1)
-     (PDFSymbol "Pages")   ->
-          case (dictLookup "Kids" treeNode "no children array in node") of
-            (PDFArray childArray) ->
-              case (dictLookup "Count" treeNode "invalid Pages node (no count)") of
-                (PDFInt count) 
-                  | n < count  -> getPage (PDFArray childArray) (count - n) -- go deeper
-                  | otherwise  -> getPage (PDFArray restNodes) (n - count) -- skip this node
-                _ -> Nothing -- "bad count in page tree"
-            _ -> Nothing -- "missing child array in page tree"
-     _ -> Nothing -- "bad Dict type in getPage"
      
 -- appendPage pageTree newPage returns a new Page Tree with newPage appended to the end
 appendPage :: PDFObject -> PDFObject -> PDFObject
@@ -140,6 +108,7 @@ showPDFObject (PDFPageRaw obj) = (showPDFObject obj)
 showPDFObject (PDFError str) = (show str)
 showPDFObject (PDFComment str) = "%" ++ (show str)
 showPDFObject (PDFXObject _) = ("pdfxobject ??")
+showPDFObject _ = undefined "can't showPDFObject a non PDFString object (yet)"
 
 showKeyObject :: PDFKey -> PDFObject -> String -> String
 showKeyObject (PDFKey key) obj initString = initString ++ 
@@ -188,14 +157,15 @@ putPDF s = State.put s
 -- It's still this bridge code that throws me a bit.
 rundoc :: PDF () -> PDFDocument
 rundoc m = d where
-    myState = State.execState m (newPDFState pageBox )
+    myState = State.execState m (newPDFState globalPageBox )
     d = masterDocument myState
 
 appendStream :: PDFObject -> String -> PDFObject
 appendStream (PDFStream s) ns = PDFStream (s ++ ns)
+appendStream _ _ = PDFError "Non-stream argument to appendStream"
 
 newPDFState :: PDFObject -> PDFState
-newPDFState pageBox = PDFState {
+newPDFState _pageBox = PDFState {
         masterDocument = doc,
         streamAccum = PDFStream "",
         rsrcDict = PDFDict (fromList []),
@@ -223,13 +193,13 @@ endPage = do
     let s' = appendStream (streamAccum myState) " ET"
     let (streamRef, d') = addObjectGetRef s' (masterDocument myState)
     let (rsrcRef, d'') = addObjectGetRef 
-            (PDFDict (fromList [ ((PDFKey "ProcSet"), procSet), 
+            (PDFDict (fromList [ ((PDFKey "ProcSet"), globalProcSet), 
                                  ((PDFKey "Font"), (rsrcDict myState)) ]))
             d'
     let pages = pagesArray myState
     -- premature:
     --     let (pageRef, d''') = addObjectGetRef (newPage streamRef pageBox parentRef rsrcRef) d''
-    let pages' = pages ++ [(newPageRaw streamRef pageBox PDFNull rsrcRef)]
+    let pages' = pages ++ [(newPageRaw streamRef globalPageBox PDFNull rsrcRef)]
     let myState' = myState {
         streamAccum = (PDFStream ""),
         masterDocument = d'',
@@ -244,28 +214,25 @@ endDocument = do
     let doc' = buildPageTree (masterDocument myState) (pagesArray myState)
     putPDF (myState { masterDocument = doc' })
 
-procSet = PDFArray [(PDFSymbol "PDF"), (PDFSymbol "Text") ]
 
-pageBox = PDFArray [ (PDFInt 0), (PDFInt 0), 
+globalPageBox, globalProcSet :: PDFObject
+    
+globalProcSet = PDFArray [(PDFSymbol "PDF"), (PDFSymbol "Text") ]
+
+globalPageBox = PDFArray [ (PDFInt 0), (PDFInt 0), 
                     (PDFInt 612), (PDFInt 792) ] 
 
 -- buildPageTree takes a PDFDocument and an array of PDFPage objects
 -- returns a new PDFDocument with a page tree added
 --   we modify the PDFPage objects to set their parent values to the newly created parent node(s)
 buildPageTree :: PDFDocument -> [PDFObject] -> PDFDocument
-buildPageTree doc pagesArray = doc'''' where
-    (newPagesArray, doc') = buildArrayOfRefs pagesArray parentRef doc
+buildPageTree doc pgArray = doc'''' where
+    (newPagesArray, doc') = buildArrayOfRefs pgArray parentRef doc
     (parentRef, doc'') = addObjectGetRef (pageTreeFromArray newPagesArray) doc'
     (_pagesArrayRef, doc''') = addObjectGetRef (PDFArray newPagesArray) doc''
     doc'''' = doc''' { 
         catalogDict = pageTreeNode parentRef PDFNull 
     }
-
-{-
-pageTreeToList :: PDFDocument -> [PDFObject]
-pageTreeToList doc = pages where
-    pages = 
--}
 
 -- takes an array of Page objects, a parent reference, and a PDFDocument
 -- sets the parent of each page object to the parent ref, inserts that modified object 
@@ -275,8 +242,10 @@ buildArrayOfRefs [] _ doc = ([], doc)
 buildArrayOfRefs (node : rest) parentRef doc = ((nodeRef : restRefs), doc'') where
     (nodeRef, doc') = addObjectGetRef newNode doc
     newNode = case node of (PDFPageRaw pageDict) -> (PDFPageRaw (addToDict pageDict "Parent" parentRef))
+                           _ -> PDFError "bad array in buildArrayOfRefs"
     (restRefs, doc'') = buildArrayOfRefs rest parentRef doc'
 
+-- Now for a bunch of imaging operations.
 moveTo :: Int -> Int -> PDF ()
 moveTo x y = do
     -- (od, PDFStream os, dict, pgs) <- State.get

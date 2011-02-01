@@ -21,7 +21,7 @@ import Data.Maybe
 import Text.PDF.Types
 
 traversePDFReference :: PDFObject -> PDFDocument -> PDFObject
-traversePDFReference (PDFReference objNum g) (PDFDocument _ objList ) = 
+traversePDFReference (PDFReference objNum _g) (PDFDocument _ objList ) = 
     head (drop (objNum - 1) objList)
 traversePDFReference x _ = (PDFError (show x))
 
@@ -66,7 +66,7 @@ rotatePage :: Float -> PDFDocumentParsed -> PDFPageParsed -> PDFPageParsed
 rotatePage degrees inDoc inPage = inPage {
         contents = newContents
     } where
-        (pageWidth, pageHeight) = getDocDimensions inDoc
+        (_pageWidth, pageHeight) = getDocDimensions inDoc
         newContents = case (contents inPage) of 
             PDFArray elts -> doRotate degrees (PDFArray elts) pageHeight
             str@PDFStream{} -> doRotate degrees (PDFArray [str]) pageHeight
@@ -110,12 +110,13 @@ skipLine ('\n' : cs) = cs
 skipLine (_ : cs) = skipLine cs
 
 dictLookup :: String -> PDFObject -> String -> PDFObject
-dictLookup key (PDFDict map) errorMsg =
-    fromMaybe (PDFError errorMsg) (Map.lookup (PDFKey key) map)
+dictLookup key (PDFDict dictMap) errorMsg =
+    fromMaybe (PDFError errorMsg) (Map.lookup (PDFKey key) dictMap)
 dictLookup _ _ _ = undefined "bad args to dictLookup"
 
 addToDict :: PDFObject -> String -> PDFObject -> PDFObject
-addToDict (PDFDict map) key value = PDFDict (Map.insert (PDFKey key) value map)
+addToDict (PDFDict dictMap) key value = PDFDict (Map.insert (PDFKey key) value dictMap)
+addToDict _ _ _ = PDFError "bad args to addToDict"
 
 intValue :: PDFObject -> Maybe Int
 intValue (PDFInt n) = Just n

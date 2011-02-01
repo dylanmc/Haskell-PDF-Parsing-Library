@@ -21,22 +21,29 @@ type PDFDictionaryMap = Map PDFKey PDFObject
 type PDFObjectList = [PDFObject]
 type PDFPageList = [PDFPageParsed] 
 
-data PDFGlobals = 
-    PDFGlobals {
-        -- more stuff goes here - especially global page dictionary definitions
-        rootObject :: PDFObject
-    } deriving (Show)
-
+-- this is the pure PDFObject representation of a document. It's useful for generation,
+-- (all you need to do is pretty-print the structure) but not very useful for 
+-- manipulation, because you have much more to parse. 
 data PDFDocument = 
     PDFDocument {
-        catalogDict :: PDFObject,    -- the catalog dictionary
+        catalogDict :: PDFObject,    -- the catalog dictionary (the root of the Page Tree & friends)
         objectList :: PDFObjectList  -- logically, a map from objectNum -> PDFObject
     } deriving (Show)
+
+-- the following types hint at PDF parsing functions to come.
+-- I've got them written, but they're a mess, so I'm leaving them 
+-- out for the initial submission.  It could be that these data types
+-- were the wrong first step, but we'll cross that bridge as I clean things up.
 
 data PDFDocumentParsed = 
     PDFDocumentParsed {
         pageList :: PDFPageList,
         globals  :: PDFGlobals
+    } deriving (Show)
+
+data PDFGlobals = 
+    PDFGlobals {
+        -- global page dictionary definitions, if there are any
     } deriving (Show)
 
 data PDFPageParsed = 
@@ -47,6 +54,13 @@ data PDFPageParsed =
         parent    :: PDFObject -- a reference   -- other stuff too
     } deriving (Show)
 
+data PDFFontParsed = 
+    PDFFontParsed {
+        baseFont  :: String,
+        otherElts :: PDFDictionaryMap
+    } deriving (Show)
+    
+emptyPage :: PDFPageParsed
 emptyPage = PDFPageParsed {
     fonts = Map.empty,
     resources = Map.empty,
@@ -54,6 +68,7 @@ emptyPage = PDFPageParsed {
     parent = PDFNull
 }
 
+nullStream :: PDFObject
 nullStream = PDFStream ""
 
 data PDFObject = 
