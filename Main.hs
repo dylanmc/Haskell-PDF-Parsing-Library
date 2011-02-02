@@ -37,6 +37,6 @@ parseAndWriteFile inName outName = do
     inString <- readFile inName
     let contents = PDFContents inString
     let parsed = parsePDF contents
-    putStrLn (show parsed)
+    putStrLn ("done: " ++ show parsed)
 
         

@@ -322,12 +322,14 @@ stringChar =    (do
 
 pdfDict :: Parser PDFObject
 pdfDict = do
-            trace "startDict" whiteSpace -- printf debugging here...
+            -- trace "startDict" whiteSpace -- printf debugging here...
+            _ <- whiteSpace
             _ <- string "<<"
             retList <- many1 keyValuePair
             _ <- string ">>"
             let ret = PDFDict (fromList retList)
-            trace ("doneDict" ++ show ret) whiteSpace
+            -- trace ("doneDict" ++ show ret) whiteSpace
+            _ <- whiteSpace
             return ret
 
 replicateM :: Int -> Parser a -> Parser [a]
@@ -367,11 +369,11 @@ keyValuePair :: Parser (PDFKey, PDFObject)
 keyValuePair =  do
             _ <- whiteSpace
             ret <- pdfKey
-            trace ("key: " ++ (show ret)) whiteSpace
-            -- _ <- whiteSpace
+            -- trace ("key: " ++ (show ret)) whiteSpace
+            _ <- whiteSpace
             ret' <- pdfObject
-            trace ("value: " ++ (show ret')) whiteSpace
-            -- _ <- whiteSpace
+            -- trace ("value: " ++ (show ret')) whiteSpace
+            _ <- whiteSpace
             return (ret, ret')
 
 valueWhitespacePair :: Parser PDFObject
