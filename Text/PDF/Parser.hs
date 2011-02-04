@@ -50,25 +50,6 @@ parsePDF contents = PDFDocument {
             Left err -> error ("malformed top-level PDF object: *** " ++ objStr ++ "ERR:" ++ (show err) ++ "***\n")
             Right obj -> obj
 
-
-{-
-do
-    putStrLn $ "xref: " ++ ( show xrefEntries)
-    putStrLn $ "object strings:" ++ (show objectStrings)
-    return 
-        getObjectString' objStr = case (parse topLevelObject "" objStr) of
-            Left _ -> error ("malformed top-level PDF object" ++ objStr)
-            Right obj -> obj
--}
-        -- objectString = getObjectString contents xrefEntries 2
-        -- leftoff first get object strings THEN parse each one
-        
-{-
-        (stringMap, rootObject) = trace "parsePDF:" (getXRefTable (PDFContents clx))
-        stringList = undefined -- trace (show (getObjectString (PDFContents clx) stringMap) 2) error "blah"
-        objects = trace (show (getObjectString (PDFContents clx) stringMap 2)) error "haven't finished parsePDF" -- map (1 .. numObjects) getObjectString stringMap (PDFContents clx)
--}
-
 digestDocument :: PDFDocument -> PDFDocumentParsed
 digestDocument inDoc = PDFDocumentParsed {
         pageList = pages,
@@ -199,7 +180,7 @@ getPage _ _ = error "unexpected page structure"
 findXRefOffset :: [String] -> Int
 findXRefOffset (first:butFirst)     
                 | (startsWith first "startxref") = read (head butFirst)
-                | (butFirst == []) = 0
+                | (butFirst == []) = error "Unable to find offset of xref table"
                 | True = (findXRefOffset butFirst)
 findXRefOffset [] = 0 -- notreached?
 
@@ -407,8 +388,19 @@ getXRefTable (PDFContents clx) = (readXRefTable 1 restStr'' numObjs Map.empty, r
     (numObjs, restStr') = parseNum restStr 0
     restStr'' = skipLine restStr'
     trailerGuess = 40
-    rootObject = PDFString (show lastFewLines )
-    
+    -- extract the trailer dict, and from that get the Document Catalog (aka Root)
+    catalogStr = skipPast "trailer" lastFewLines
+    rootObject = case (parse pdfObject "" (foldl (++) "" catalogStr)) of
+        Left err -> error ("malformed Trailer Dictionary *** " ++ (show catalogStr) ++ "ERR:" ++ (show err) ++ "***\n")
+        Right (PDFDict d) -> PDFDict d
+        Right obj -> error ("Incorrect trailer object type" ++ (show obj)) 
+
+skipPast :: String -> [String] -> [String]
+skipPast skipMe [] = error $ "Unable to locate " ++ skipMe
+skipPast skipMe (line:lines) 
+    | (startsWith line skipMe) = lines
+    | True = skipPast skipMe lines
+
 -- Laboriously extracts nth object's string from a PDF file
 -- There are many better ways to do this, but this exercises a lot of the above code...
 getObjectString :: PDFContents -> Map ObjNum FileIndex -> Int -> String
@@ -443,3 +435,13 @@ parseNum (c : cs) numSoFar
                 | isDigit c = parseNum cs (numSoFar * 10 + (digitToInt c))
                 | True = (numSoFar, cs)
 
+{- 
+  Section 3.6 of the PDF reference (version 1.6) talks about PDF Document structure.
+  The Trailer Dict has a Root entry. The root entry points to the Catalog Dictionary.
+  The Catalog Dictionary holds the 
+    * /Pages -> page tree, 
+    * the outline hierarchy, 
+    * article threads, 
+    * named destinations, and 
+    * form data.
+-}
