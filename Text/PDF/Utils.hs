@@ -21,10 +21,10 @@ import Data.Maybe
 import Text.PDF.Types
 
 traversePDFReference :: PDFObject -> PDFDocument -> PDFObject
-traversePDFReference (PDFReference objNum _g) (PDFDocument _ objList ) = 
-    head (drop (objNum - 1) objList)
-traversePDFReference x _ = (PDFError (show x))
-
+traversePDFReference (PDFReference objNum _g) (PDFDocument _ objMap ) = 
+    fromMaybe (PDFError ("Unable to find object " ++ (show objNum))) (Map.lookup objNum objMap)
+traversePDFReference _ _ = error "Bad arguments to traversePDFReference"
+    
 -- I decided to make all nodes in the tree be created with this function,
 -- toggled by whether parent is PDFNull or not.
 
@@ -43,10 +43,11 @@ pageTreeNode pagesArrayRef parentRef = PDFDict (fromList [
 
 addObjectGetRef :: PDFObject -> PDFDocument -> (PDFObject, PDFDocument)
 addObjectGetRef (PDFReference n g) d = ((PDFReference n g), d)
-addObjectGetRef pdfobj (PDFDocument root objs ) = (newRef, newDoc) where
-    newRef = (PDFReference objnum 0)
-    newDoc = (PDFDocument root (objs ++ [pdfobj]) )
-    objnum = 1 + length objs
+addObjectGetRef pdfobj (PDFDocument root oldMap ) = (newRef, newDoc) where
+    newRef = (PDFReference objNum 0)
+    newDoc = (PDFDocument root newMap )
+    newMap = Map.insert objNum pdfobj oldMap
+    objNum = (Map.size oldMap + 1)
 
 joinPDFDocument :: PDFDocument -> PDFDocument -> PDFDocument
 joinPDFDocument = undefined

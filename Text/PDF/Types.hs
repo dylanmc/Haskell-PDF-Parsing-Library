@@ -18,7 +18,7 @@ import Data.Map as Map
 newtype PDFKey = PDFKey String deriving (Show, Ord, Eq)
 
 type PDFDictionaryMap = Map PDFKey PDFObject
-type PDFObjectList = [PDFObject]
+type PDFObjectMap = Map Int PDFObject
 type PDFPageList = [PDFPageParsed] 
 
 -- this is the pure PDFObject representation of a document. It's useful for generation,
@@ -27,7 +27,7 @@ type PDFPageList = [PDFPageParsed]
 data PDFDocument = 
     PDFDocument {
         catalogDict :: PDFObject,    -- the catalog dictionary (the root of the Page Tree & friends)
-        objectList :: PDFObjectList  -- logically, a map from objectNum -> PDFObject
+        objectList :: PDFObjectMap   -- a map from objectNum -> PDFObject
     } deriving (Show)
 
 -- the following types hint at PDF parsing functions to come.

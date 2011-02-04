@@ -9,12 +9,12 @@
 -- Stability : provisional
 -- Portability: portable
 --
--- Reading in and parsing PDF documents
+-- Parsing PDF documents
 --------------------------------------------------------------------
 module Text.PDF.Parser where
 
 import Text.ParserCombinators.Parsec 
-import Text.Read as Read
+-- import Text.Read as Read
 
 import Data.Map as Map
 import Data.Char as Char
@@ -24,7 +24,7 @@ import Data.Maybe
 import Text.PDF.Types
 import Text.PDF.Utils
 
-import Debug.Trace
+-- import Debug.Trace
 
 type ObjNum = Int
 type FileIndex = Int
@@ -33,22 +33,29 @@ data PDFContents = PDFContents String deriving (Show)
 
 -- From 30,000 feet, Parsing a PDF file goes like this:
 --  * find the xref table 
---  o turn the xref table into a map from integers to PDF Objects
---  o find and parse the trailer dictionary
---  o use the trailer dictinoary to find and parse the page tree
+--  * turn the xref table into a map from integers to PDF Objects
+--  * find and parse the trailer dictionary
+--  o use the trailer dictionary to find and parse the page tree
 --  o use the page tree to build a list of pages
 --  o for each page, parse it into a PDFPage structure
 parsePDF :: PDFContents -> PDFDocument
-parsePDF contents = PDFDocument {
+parsePDF pdfContents = PDFDocument {
         catalogDict = rootObject,                               -- the catalog dictionary
-        objectList = Prelude.map parseObject' objectStrings     -- objectNum -> PDFObject
+        objectList = enMapify $ Prelude.map parseObject' objectStrings     -- objectNum -> PDFObject
     } where
-        (xrefEntries, rootObject) = getXRefTable contents
+        (xrefEntries, rootObject) = getXRefTable pdfContents
         objectStrings = Prelude.map getObjectString' [1..(Map.size xrefEntries)]
-        getObjectString' = getObjectString contents xrefEntries
+        getObjectString' = getObjectString pdfContents xrefEntries
         parseObject' objStr = case (parse topLevelObject "" objStr) of
             Left err -> error ("malformed top-level PDF object: *** " ++ objStr ++ "ERR:" ++ (show err) ++ "***\n")
             Right obj -> obj
+
+enMapify :: [a] -> Map Int a
+enMapify objList = fromList (zip [1..(length objList)] objList)
+
+{-enMapify :: Int -> [a] -> Map Int a -> Map Int a
+enMapify _ [] inMap = inMap
+enMapify nextKey [first:rest] = enMapify (nextKey+1) rest (insert nextKey first inMap) -}
 
 digestDocument :: PDFDocument -> PDFDocumentParsed
 digestDocument inDoc = PDFDocumentParsed {
@@ -59,14 +66,14 @@ digestDocument inDoc = PDFDocumentParsed {
         pages = getDocumentPages inDoc globs
 
 flattenDocument :: PDFDocumentParsed -> PDFDocument
-flattenDocument (PDFDocumentParsed p g) = PDFDocument {
+flattenDocument (PDFDocumentParsed p _g) = PDFDocument {
         catalogDict = catalog,
         objectList = objects'
     } where
         catalog = pageTreeNode parentRef PDFNull 
         objects = Prelude.map flattenPage p
-        catalogObjectNumber = length objects'
-        objects' = objects ++ [parentRef]
+        catalogObjectNumber = Map.size objects'
+        objects' = enMapify (objects ++ [parentRef])
         parentRef = PDFReference catalogObjectNumber 0
 
 -- we don't define parent here -- does that matter?
@@ -76,7 +83,7 @@ flattenPage pp = PDFDict pageDict where
     pageDictList = [(PDFKey "Fonts", PDFDict (fonts pp)), (PDFKey "Resources", PDFDict (resources pp)), (PDFKey "Contents", (contents pp))]
 
 extractGlobals :: PDFDocument -> PDFGlobals
-extractGlobals d = PDFGlobals {
+extractGlobals _d = PDFGlobals {
     } where 
         myRoot = PDFString "todo: extract globals" -- error "todo: extract globals"
 
@@ -84,7 +91,7 @@ extractGlobals d = PDFGlobals {
 -- take a document, extract its page tree and flatten it to a PageList
 -- called by digestDocument
 getDocumentPages :: PDFDocument -> PDFGlobals -> PDFPageList
-getDocumentPages d g = pages where
+getDocumentPages d _g = pages where
     catalog = case catalogDict d of
         PDFDict m -> m
         _         -> error "missing/invalid catalog dict"
@@ -110,7 +117,7 @@ flattenPageTree doc (PDFDict d) = case Map.lookup (PDFKey "Kids") d of
         Just (PDFArray k) -> flattenPageTree doc (PDFArray k)
         _            -> error "bad value of Kids array"
 
-flattenPageTree doc o = error "bad page tree in flattenPageTree: "
+flattenPageTree _ _ = error "bad page tree in flattenPageTree: "
 
 -- LEFTOFF: TODO: where are Fonts kept? :-) 
 -- XXX
@@ -142,7 +149,8 @@ parsePage _ p = error ("internal error: parsePage called on non-dict" ++ (show p
 
 getPageTree :: PDFDocument -> PDFObject
 getPageTree d = traversePDFReference (getPageTreeRef d) d
--- getPageTreeRef :: PDFDocument -> PDFObject
+
+getPageTreeRef :: PDFDocument -> PDFObject
 getPageTreeRef (PDFDocument catalogDictRef objList ) = pageTreeRef where
     catalogDictMap = case (traversePDFReference catalogDictRef 
                             (PDFDocument undefined objList )) of
@@ -208,8 +216,8 @@ toInt _ = error "toInt on non-numeric PDF object"
 
 topLevelObject :: Parser PDFObject
 topLevelObject =  do
-    objNum <- intLex
-    genNum <- intLex
+    _objNum <- intLex
+    _genNum <- intLex
     _ <- whiteSpace
     _ <- string "obj"
     _ <- whiteSpace
@@ -314,7 +322,7 @@ pdfDict = do
             return ret
 
 replicateM :: Int -> Parser a -> Parser [a]
-replicateM count parser = loop count
+replicateM iters parser = loop iters
     where
     loop i | i <= 0 = return []
            | otherwise = do
@@ -329,15 +337,15 @@ pdfStream :: Parser PDFObject
 pdfStream = do
             -- _ <- pdfDict
             PDFDict lengthDict <- pdfDict
-            length <- case Map.lookup (PDFKey "Length") lengthDict of
+            streamLen <- case Map.lookup (PDFKey "Length") lengthDict of
                 Just (PDFInt i) -> return i
                 Just _ -> fail "non-integer value for Length in a PDF Stream"
                 _ -> fail "attempted to parse Stream, couldn't find Length"
             _ <- string "stream"
             _ <- newline
-            body <- replicateM length anyChar
+            body <- replicateM streamLen anyChar
             _ <- newline
-            string "endstream"
+            _ <- string "endstream"
             -- need to slurp the next <length> bytes
             -- body <- many anyChar -- or could use the value from lengthDict
             -- nice try but no go: body <- anyChar `endBy` string "endstream" -- or could use the value from lengthDict
@@ -373,9 +381,18 @@ pdfArray = do
             _ <- whiteSpace
             return $ PDFArray ret
 
+{-
+  Section 3.6 of the PDF reference (version 1.6) talks about PDF Document structure.
+  The Trailer Dict has a Root entry. The root entry points to the Catalog Dictionary.
+  The Catalog Dictionary holds the 
+    * /Pages -> page tree, 
+    * the outline hierarchy, 
+    * article threads, 
+    * named destinations, and 
+    * form data.
+-}
 -- Read the XRef table from the PDFContents. This table maps 
 --   integer object indices to the byte offset of the n'th PDF Object in the document
--- TODO: fill in the root object
 getXRefTable :: PDFContents -> (Map ObjNum FileIndex, PDFObject) -- returns the trailer dict and the Root Object
 getXRefTable (PDFContents clx) = (readXRefTable 1 restStr'' numObjs Map.empty, rootObject) where
     (_, lastFewLines) = splitAt trailerGuess $ lines clx
@@ -389,7 +406,7 @@ getXRefTable (PDFContents clx) = (readXRefTable 1 restStr'' numObjs Map.empty, r
     restStr'' = skipLine restStr'
     trailerGuess = 40
     -- extract the trailer dict, and from that get the Document Catalog (aka Root)
-    catalogStr = skipPast "trailer" lastFewLines
+    catalogStr = skipPast "trailer" lastFewLines -- sure there's a prelude equivalent... todo
     rootObject = case (parse pdfObject "" (foldl (++) "" catalogStr)) of
         Left err -> error ("malformed Trailer Dictionary *** " ++ (show catalogStr) ++ "ERR:" ++ (show err) ++ "***\n")
         Right (PDFDict d) -> PDFDict d
@@ -397,9 +414,9 @@ getXRefTable (PDFContents clx) = (readXRefTable 1 restStr'' numObjs Map.empty, r
 
 skipPast :: String -> [String] -> [String]
 skipPast skipMe [] = error $ "Unable to locate " ++ skipMe
-skipPast skipMe (line:lines) 
-    | (startsWith line skipMe) = lines
-    | True = skipPast skipMe lines
+skipPast skipMe (firstLine:restLines) 
+    | (startsWith firstLine skipMe) = restLines
+    | True = skipPast skipMe restLines
 
 -- Laboriously extracts nth object's string from a PDF file
 -- There are many better ways to do this, but this exercises a lot of the above code...
@@ -435,13 +452,3 @@ parseNum (c : cs) numSoFar
                 | isDigit c = parseNum cs (numSoFar * 10 + (digitToInt c))
                 | True = (numSoFar, cs)
 
-{- 
-  Section 3.6 of the PDF reference (version 1.6) talks about PDF Document structure.
-  The Trailer Dict has a Root entry. The root entry points to the Catalog Dictionary.
-  The Catalog Dictionary holds the 
-    * /Pages -> page tree, 
-    * the outline hierarchy, 
-    * article threads, 
-    * named destinations, and 
-    * form data.
--}

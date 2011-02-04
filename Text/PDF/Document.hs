@@ -19,6 +19,7 @@ import Text.PDF.Types
 import Text.PDF.Utils
 -- import Text.PDF.Parser
 import System.IO
+import Data.Maybe
 
 header14 :: String
 header14 = "%PDF-1.4\n"
@@ -172,7 +173,7 @@ newPDFState _pageBox = PDFState {
         pagesArray = [],
         pageTreeElt = PDFNull -- might not need this in the state monad...
     } where
-        doc = (PDFDocument PDFNull [] )
+        doc = (PDFDocument PDFNull Map.empty )
 
 beginPage :: PDF ()
 beginPage = do
@@ -286,10 +287,11 @@ printPDFDocument h d = do
 printPDFDocument' :: Handle -> PDFDocument -> ObjectIndices -> Int-> IO PDFDocument
 printPDFDocument' 
         h
-        (PDFDocument _a (o:os) )
+        (PDFDocument _a objectMap )
         (ObjectIndices ixs)  
         currIx = do
             let objNum = length ixs
+            let o = fromMaybe (PDFError ("Unable to lookup object # " ++ (show objNum))) (Map.lookup objNum objectMap)
             let prefixStr = (show (1 + objNum)) ++ " 0 obj\n"
             let str = showPDFObject (o)
             let postFixStr = "\nendobj\n"
@@ -297,7 +299,7 @@ printPDFDocument'
             hPutStr h (prefixStr)
             hPutStr h (str)
             hPutStr h (postFixStr)
-            ret <- printPDFDocument' h (PDFDocument _a os ) (ObjectIndices (ixs ++ [currIx])) newIx
+            ret <- printPDFDocument' h (PDFDocument _a objectMap ) (ObjectIndices (ixs ++ [currIx])) newIx
             return ret
 
 -- empty PDFObjectList -> transition from printing objects to 
@@ -306,10 +308,10 @@ printPDFDocument'
 -- xref table output, then prints the trailer dict and trailer
 printPDFDocument'
         h
-        (PDFDocument rootRef [] )
+        (PDFDocument rootRef _ )
         (ObjectIndices (ixs)) 
         currIx = do
             printXRefIndexes h ixs 0
             let numObjects = 1 + length ixs
             printTrailer h rootRef numObjects currIx 
-            return (PDFDocument rootRef [] ) 
+            return (PDFDocument rootRef Map.empty ) 
