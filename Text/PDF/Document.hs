@@ -24,30 +24,6 @@ import Data.Maybe
 header14 :: String
 header14 = "%PDF-1.4\n"
 
-printXRefIndexes :: Handle -> [Int] -> Int -> IO () 
-printXRefIndexes _ [] _ = do
-    return ()
-
-printXRefIndexes h a 0 = do
-    hPutStrLn h ("xref\n" ++ "0 " ++ show (1 + length a))
-    hPutStrLn h ((padTo "" 10) ++ " 65535 f ")
-    printXRefIndexes h a 1
-    
-printXRefIndexes h (ix:ixs) n = do
-    hPutStrLn h ((padTo (show ix) 10) ++ " 00000 n ")
-    printXRefIndexes h ixs (n + 1)
-
-printTrailer :: Handle -> PDFObject -> Int -> Int -> IO ()
-printTrailer h rootRef numObjects currIx = do
-        hPutStrLn h ("trailer") 
-        hPutStrLn h (showPDFObject ((trailerObj numObjects) rootRef ))
-        hPutStrLn h ("startxref\n" ++ (show (currIx)))
-        hPutStrLn h ("%%EOF")
-    where
-        trailerObj n rootR = PDFDict 
-            (fromList [((PDFKey "Root"), rootR), 
-                       ((PDFKey "Size"), (PDFInt n))])
-
 -- XXX TODO: if the last arg is a dict, and not a dictRef, do addObject dance
 newPageRaw :: PDFObject -> PDFObject -> PDFObject -> PDFObject -> PDFObject
 newPageRaw stream mediaBox parentRef rscDict = 
@@ -279,34 +255,38 @@ printPDFDocument :: Handle -> PDFDocument -> IO PDFDocument
 printPDFDocument h d = do
     let prefixLen = length header14
     hPutStr h (header14)
-    ret <- printPDFDocument' h d (ObjectIndices []) prefixLen
+    ret <- printPDFDocument' h d (ObjectIndices []) prefixLen 1
     return ret
 
 -- empties the PDFObjectList, printing each object as we go, adding
 -- its offset in the output file to "ObjectIndices"
-printPDFDocument' :: Handle -> PDFDocument -> ObjectIndices -> Int-> IO PDFDocument
+printPDFDocument' :: Handle -> PDFDocument -> ObjectIndices -> Int-> Int -> IO PDFDocument
 printPDFDocument' 
         h
         (PDFDocument _a objectMap )
         (ObjectIndices ixs)  
-        currIx = do
-            let objNum = length ixs
-            let o = fromMaybe (PDFError ("Unable to lookup object # " ++ (show objNum))) (Map.lookup objNum objectMap)
-            let prefixStr = (show (1 + objNum)) ++ " 0 obj\n"
-            let str = showPDFObject (o)
-            let postFixStr = "\nendobj\n"
-            let newIx = currIx + length str + length prefixStr + length postFixStr
-            hPutStr h (prefixStr)
-            hPutStr h (str)
-            hPutStr h (postFixStr)
-            ret <- printPDFDocument' h (PDFDocument _a objectMap ) (ObjectIndices (ixs ++ [currIx])) newIx
-            return ret
+        currIx
+        objNum = case (mapSize >= objNum) of
+            True -> do
+                hPutStr h (prefixStr)
+                hPutStr h (str)
+                hPutStr h (postFixStr)
+                printPDFDocument' h (PDFDocument _a objectMap ) (ObjectIndices (ixs ++ [currIx])) newIx (objNum + 1)
+            False -> printPDFDocument'' h (PDFDocument _a objectMap ) (ObjectIndices ixs) currIx
+        where
+            mapSize = Map.size objectMap
+            o = fromMaybe (PDFError ("Unable to lookup object # " ++ (show objNum))) (Map.lookup objNum objectMap)
+            prefixStr = (show (objNum)) ++ " 0 obj\n"
+            str = showPDFObject (o)
+            postFixStr = "\nendobj\n"
+            newIx = currIx + length str + length prefixStr + length postFixStr
 
 -- empty PDFObjectList -> transition from printing objects to 
 -- printing the xref table, which is the list of object indices
 -- so this function prints the xref table header, kicks off the 
 -- xref table output, then prints the trailer dict and trailer
-printPDFDocument'
+printPDFDocument'' :: Handle -> PDFDocument -> ObjectIndices -> Int -> IO PDFDocument
+printPDFDocument''
         h
         (PDFDocument rootRef _ )
         (ObjectIndices (ixs)) 
@@ -315,3 +295,31 @@ printPDFDocument'
             let numObjects = 1 + length ixs
             printTrailer h rootRef numObjects currIx 
             return (PDFDocument rootRef Map.empty ) 
+
+printXRefIndexes :: Handle -> [Int] -> Int -> IO () 
+printXRefIndexes _ [] _ = do
+    return ()
+
+printXRefIndexes h a 0 = do
+    hPutStrLn h ("xref\n" ++ "0 " ++ show (1 + length a))
+    hPutStrLn h ((padTo "" 10) ++ " 65535 f ")
+    printXRefIndexes h a 1
+
+printXRefIndexes h (ix:ixs) n = do
+    hPutStrLn h ((padTo (show ix) 10) ++ " 00000 n ")
+    printXRefIndexes h ixs (n + 1)
+
+printTrailer :: Handle -> PDFObject -> Int -> Int -> IO ()
+printTrailer h rootRef numObjects currIx = do
+        hPutStrLn h ("trailer") 
+        hPutStrLn h (showPDFObject ((trailerObj numObjects) rootRef ))
+        hPutStrLn h ("startxref\n" ++ (show (currIx)))
+        hPutStrLn h ("%%EOF")
+    where
+        trailerObj n rootR = PDFDict 
+            (fromList [((PDFKey "Root"), rootR), 
+                       ((PDFKey "Size"), (PDFInt n))])
+
+
+
+

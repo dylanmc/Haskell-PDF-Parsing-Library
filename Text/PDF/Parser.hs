@@ -24,7 +24,7 @@ import Data.Maybe
 import Text.PDF.Types
 import Text.PDF.Utils
 
--- import Debug.Trace
+import Debug.Trace
 
 type ObjNum = Int
 type FileIndex = Int
@@ -179,20 +179,8 @@ getPage (PDFArray (treeNode:restNodes))  n =
      _ -> Nothing -- "bad Dict type in getPage"
 getPage _ _ = error "unexpected page structure"
 
--- later:
--- getObject :: PDFDocument -> Int -> PDFObject
--- getObject _ _ = undefined
 
--- Given a list of strings (lines in a file), which are the last few lines of a PDF file
--- return the index of the beginning of the xref table
-findXRefOffset :: [String] -> Int
-findXRefOffset (first:butFirst)     
-                | (startsWith first "startxref") = read (head butFirst)
-                | (butFirst == []) = error "Unable to find offset of xref table"
-                | True = (findXRefOffset butFirst)
-findXRefOffset [] = 0 -- notreached?
-
--- parser functions
+-- parsec functions
 run :: Show a => Parser a -> String -> IO ()
 run p input
         = case (parse p "" input) of
@@ -349,11 +337,10 @@ pdfStream = do
             -- need to slurp the next <length> bytes
             -- body <- many anyChar -- or could use the value from lengthDict
             -- nice try but no go: body <- anyChar `endBy` string "endstream" -- or could use the value from lengthDict
-            -- thanks Trevor! (not: _ <- string "endstream"
+            -- replicateM -- thanks Trevor! 
             return $ PDFStream $  body 
 
 
-            
 keyValuePair :: Parser (PDFKey, PDFObject)
 keyValuePair =  do
             _ <- whiteSpace
@@ -381,6 +368,9 @@ pdfArray = do
             _ <- whiteSpace
             return $ PDFArray ret
 
+-- end of parsec functions
+
+-- Parsing the trailer and XRef table
 {-
   Section 3.6 of the PDF reference (version 1.6) talks about PDF Document structure.
   The Trailer Dict has a Root entry. The root entry points to the Catalog Dictionary.
@@ -400,8 +390,11 @@ getXRefTable (PDFContents clx) = (readXRefTable 1 restStr'' numObjs Map.empty, r
     fileLen = length $ clx
     fileByteArray = listArray (0,fileLen-1) clx
     xrefTableString = arrayToList (xrefOffset, fileLen - xrefOffset) fileByteArray
-    skipXref = skipLine xrefTableString
-    (skipZero, restStr) = parseNum skipXref 0
+    sanityCheck = startsWith xrefTableString "xref"
+    skipXref = case sanityCheck of 
+        True -> skipLine xrefTableString
+        False -> error "Xref offset incorrect"
+    (_skipZero, restStr) = parseNum skipXref 0
     (numObjs, restStr') = parseNum restStr 0
     restStr'' = skipLine restStr'
     trailerGuess = 40
@@ -417,6 +410,16 @@ skipPast skipMe [] = error $ "Unable to locate " ++ skipMe
 skipPast skipMe (firstLine:restLines) 
     | (startsWith firstLine skipMe) = restLines
     | True = skipPast skipMe restLines
+
+-- Given a list of strings (lines in a file), which are the last few lines of a PDF file
+-- return the index of the beginning of the xref table
+findXRefOffset :: [String] -> Int
+findXRefOffset (first:butFirst)     
+                | (startsWith first "startxref") = read (head butFirst)
+                | (butFirst == []) = error "Unable to find offset of xref table"
+                | True = (findXRefOffset butFirst)
+findXRefOffset [] = 0 -- notreached?
+
 
 -- Laboriously extracts nth object's string from a PDF file
 -- There are many better ways to do this, but this exercises a lot of the above code...

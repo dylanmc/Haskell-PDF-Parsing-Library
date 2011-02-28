@@ -27,7 +27,7 @@ type PDFPageList = [PDFPageParsed]
 data PDFDocument = 
     PDFDocument {
         catalogDict :: PDFObject,    -- the catalog dictionary (the root of the Page Tree & friends)
-        objectList :: PDFObjectMap   -- a map from objectNum -> PDFObject
+        objectList  :: PDFObjectMap  -- a map from objectNum -> PDFObject
     } deriving (Show)
 
 -- the following types hint at PDF parsing functions to come.

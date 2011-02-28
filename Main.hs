@@ -6,8 +6,8 @@ import Text.PDF.Parser
 import System.IO
  
 main :: IO ()
--- main = buildAndWriteFile "foo.pdf"
-main = parseAndWriteFile "foo.pdf" "bar.pdf"
+main = buildAndWriteFile "foo.pdf"
+-- main = parseAndWriteFile "foo.pdf" "bar.pdf"
 
 buildAndWriteFile :: String -> IO ()
 buildAndWriteFile outName = do
