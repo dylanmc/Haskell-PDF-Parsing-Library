@@ -260,7 +260,7 @@ printPDFDocument h d = do
 
 -- empties the PDFObjectList, printing each object as we go, adding
 -- its offset in the output file to "ObjectIndices"
-printPDFDocument' :: Handle -> PDFDocument -> ObjectIndices -> Int-> Int -> IO PDFDocument
+printPDFDocument' :: Handle -> PDFDocument -> ObjectIndices -> Int -> Int -> IO PDFDocument
 printPDFDocument' 
         h
         (PDFDocument _a objectMap )

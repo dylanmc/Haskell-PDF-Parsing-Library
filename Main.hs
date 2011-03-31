@@ -6,8 +6,8 @@ import Text.PDF.Parser
 import System.IO
  
 main :: IO ()
-main = buildAndWriteFile "foo.pdf"
--- main = parseAndWriteFile "foo.pdf" "bar.pdf"
+-- main = buildAndWriteFile "foo.pdf"
+main = parseAndWriteFile "foo.pdf" "bar.pdf"
 
 buildAndWriteFile :: String -> IO ()
 buildAndWriteFile outName = do
@@ -36,7 +36,8 @@ parseAndWriteFile inName outName = do
     -- inFileHandle <- openFile inName ReadMode
     inString <- readFile inName
     let contents = PDFContents inString
-    let parsed = parsePDF contents
-    putStrLn ("done: " ++ show parsed)
-
-        
+    let parsed@(PDFDocument root objs) = parsePDF contents
+    outFile <- openFile outName WriteMode
+    -- _ <- printPDFDocument outFile parsed
+    putStrLn ("before 'sploding: " ++ show root)
+    putStrLn ("after 'sploding:" ++ show (explodePDF parsed))

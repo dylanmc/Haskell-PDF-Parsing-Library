@@ -2,7 +2,7 @@
 -- |
 -- Module      : Text.PDF.Parser
 -- Description : Reading in and parsing PDF documents
--- Copyright   : (c) Dylan McNamee, 2008, 2009
+-- Copyright   : (c) Dylan McNamee, 2008 - 2011
 -- License     : BSD3
 --
 -- Maintainer: Dylan McNamee <dylan@galois.com>
@@ -35,23 +35,49 @@ data PDFContents = PDFContents String deriving (Show)
 --  * find the xref table 
 --  * turn the xref table into a map from integers to PDF Objects
 --  * find and parse the trailer dictionary
+--  o starting with the root object, recurse through complex objects, parsing sub- and refered-to sub-objects
+-- This results in a big tree of objects, no pointers, ready for digesting, manipulating, or flattening.
+
+-- Digesting a PDF file goes like this:
 --  o use the trailer dictionary to find and parse the page tree
 --  o use the page tree to build a list of pages
 --  o for each page, parse it into a PDFPage structure
 parsePDF :: PDFContents -> PDFDocument
 parsePDF pdfContents = PDFDocument {
-        catalogDict = rootObject,                               -- the catalog dictionary
-        objectList = enMapify $ Prelude.map parseObject' objectStrings     -- objectNum -> PDFObject
+        catalogDict = rootObject,                                           -- the catalog dictionary
+        objectList = parsedObjectMap                                        -- objectNum -> PDFObject
     } where
         (xrefEntries, rootObject) = getXRefTable pdfContents
-        objectStrings = Prelude.map getObjectString' [1..(Map.size xrefEntries)]
+        parsedObjectMap = enMapify $ Prelude.map parseObject' objectStrings
+        objectStrings = Prelude.map getObjectString' [1..(Map.size xrefEntries)] -- cheating here - flatten instead
         getObjectString' = getObjectString pdfContents xrefEntries
         parseObject' objStr = case (parse topLevelObject "" objStr) of
             Left err -> error ("malformed top-level PDF object: *** " ++ objStr ++ "ERR:" ++ (show err) ++ "***\n")
             Right obj -> obj
 
+explodePDF :: PDFDocument -> PDFObject
+explodePDF (PDFDocument rootObject objects) = (recursivelyParse objects rootObject)
+
 enMapify :: [a] -> Map Int a
 enMapify objList = fromList (zip [1..(length objList)] objList)
+
+recursivelyParse :: (Map Int PDFObject) -> PDFObject -> PDFObject
+recursivelyParse _ (PDFString s) = (PDFString s)
+recursivelyParse _ (PDFSymbol s) = (PDFSymbol s)
+recursivelyParse _ (PDFInt i)    = (PDFInt i)
+
+recursivelyParse objectMap (PDFDict d) =  (PDFDict (Map.map (recursivelyParse objectMap) d')) where
+    d' = Map.filterWithKey (\k _ -> isn'tParent k) d
+    isn'tParent (PDFKey "Parent") = False
+    isn'tParent _ = True
+    
+-- trevor says "you could use an exception transformer" here.
+recursivelyParse objectMap (PDFReference n _) = recursivelyParse objectMap (objectMap Map.! n) 
+recursivelyParse objectMap (PDFStream s) = (PDFStream s) -- though some funky PDFs could put the length as a reference
+recursivelyParse objectMap (PDFArray a) =  (PDFArray (Prelude.map (recursivelyParse objectMap) a))
+    
+-- any remaining ones better not be recursively defined, because:
+recursivelyParse _ o = PDFString "notdone!!!"
 
 {-enMapify :: Int -> [a] -> Map Int a -> Map Int a
 enMapify _ [] inMap = inMap

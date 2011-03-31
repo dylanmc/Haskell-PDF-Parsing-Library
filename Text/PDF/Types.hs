@@ -20,6 +20,7 @@ newtype PDFKey = PDFKey String deriving (Show, Ord, Eq)
 type PDFDictionaryMap = Map PDFKey PDFObject
 type PDFObjectMap = Map Int PDFObject
 type PDFPageList = [PDFPageParsed] 
+type PDFDocumentExploded = PDFObject
 
 -- this is the pure PDFObject representation of a document. It's useful for generation,
 -- (all you need to do is pretty-print the structure) but not very useful for 
