@@ -20,6 +20,7 @@ newtype PDFKey = PDFKey String deriving (Show, Ord, Eq)
 type PDFDictionaryMap = Map PDFKey PDFObject
 type PDFObjectMap = Map Int PDFObject
 type PDFPageList = [PDFPageParsed] 
+
 type PDFDocumentExploded = PDFObject
 
 -- this is the pure PDFObject representation of a document. It's useful for generation,
@@ -38,7 +39,7 @@ data PDFDocument =
 
 data PDFDocumentParsed = 
     PDFDocumentParsed {
-        pageList :: PDFPageList,
+        pageList :: PDFPageList, -- later PDFPageList
         globals  :: PDFGlobals
     } deriving (Show)
 
@@ -49,10 +50,11 @@ data PDFGlobals =
 
 data PDFPageParsed = 
     PDFPageParsed {
-        fonts     :: PDFDictionaryMap,
         resources :: PDFDictionaryMap,
-        contents  :: PDFObject, 
-        parent    :: PDFObject -- a reference   -- other stuff too
+        fonts     :: PDFDictionaryMap,
+        contents  :: PDFObject,
+        mediaBox  :: PDFBox,
+        cropBox   :: PDFBox -- other boxes too? 
     } deriving (Show)
 
 data PDFFontParsed = 
@@ -65,12 +67,17 @@ emptyPage :: PDFPageParsed
 emptyPage = PDFPageParsed {
     fonts = Map.empty,
     resources = Map.empty,
-    contents = nullStream,
-    parent = PDFNull
+    contents = emptyStream
 }
 
-nullStream :: PDFObject
-nullStream = PDFStream ""
+-- bounding boxes are in absolute point coordinates (llx, lly, urx, ury)
+data PDFBox = 
+    Quad Int Int Int Int |
+    NullBox
+    deriving (Show,Ord,Eq)
+
+emptyStream :: PDFObject
+emptyStream = PDFStream ""
 
 data PDFObject = 
     PDFString String |

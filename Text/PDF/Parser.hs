@@ -19,12 +19,12 @@ import Text.ParserCombinators.Parsec
 import Data.Map as Map
 import Data.Char as Char
 import Data.Array as Array
-import Data.Maybe
+-- import Data.Maybe
 
 import Text.PDF.Types
 import Text.PDF.Utils
 
-import Debug.Trace
+-- import Debug.Trace
 
 type ObjNum = Int
 type FileIndex = Int
@@ -35,13 +35,13 @@ data PDFContents = PDFContents String deriving (Show)
 --  * find the xref table 
 --  * turn the xref table into a map from integers to PDF Objects
 --  * find and parse the trailer dictionary
---  o starting with the root object, recurse through complex objects, parsing sub- and refered-to sub-objects
+--  * starting with the root object, recurse through complex objects, parsing sub- and refered-to sub-objects
 -- This results in a big tree of objects, no pointers, ready for digesting, manipulating, or flattening.
-
 -- Digesting a PDF file goes like this:
---  o use the trailer dictionary to find and parse the page tree
---  o use the page tree to build a list of pages
---  o for each page, parse it into a PDFPage structure
+--  * use the trailer dictionary to find and parse the page tree
+--  * use the page tree to build a list of pages
+--  * for each page, parse it into a PDFPage structure
+
 parsePDF :: PDFContents -> PDFDocument
 parsePDF pdfContents = PDFDocument {
         catalogDict = rootObject,                                           -- the catalog dictionary
@@ -55,7 +55,7 @@ parsePDF pdfContents = PDFDocument {
             Left err -> error ("malformed top-level PDF object: *** " ++ objStr ++ "ERR:" ++ (show err) ++ "***\n")
             Right obj -> obj
 
-explodePDF :: PDFDocument -> PDFObject
+explodePDF :: PDFDocument -> PDFDocumentExploded
 explodePDF (PDFDocument rootObject objects) = (recursivelyParse objects rootObject)
 
 enMapify :: [a] -> Map Int a
@@ -66,6 +66,8 @@ recursivelyParse _ (PDFString s) = (PDFString s)
 recursivelyParse _ (PDFSymbol s) = (PDFSymbol s)
 recursivelyParse _ (PDFInt i)    = (PDFInt i)
 
+-- would like to just do Map.map, but there are cycles in the "tree" caused by those ding-dang
+-- parent pointers, so filter them out first.
 recursivelyParse objectMap (PDFDict d) =  (PDFDict (Map.map (recursivelyParse objectMap) d')) where
     d' = Map.filterWithKey (\k _ -> isn'tParent k) d
     isn'tParent (PDFKey "Parent") = False
@@ -77,20 +79,81 @@ recursivelyParse objectMap (PDFStream s) = (PDFStream s) -- though some funky PD
 recursivelyParse objectMap (PDFArray a) =  (PDFArray (Prelude.map (recursivelyParse objectMap) a))
     
 -- any remaining ones better not be recursively defined, because:
-recursivelyParse _ o = PDFString "notdone!!!"
+recursivelyParse _ o = o
 
 {-enMapify :: Int -> [a] -> Map Int a -> Map Int a
 enMapify _ [] inMap = inMap
 enMapify nextKey [first:rest] = enMapify (nextKey+1) rest (insert nextKey first inMap) -}
 
-digestDocument :: PDFDocument -> PDFDocumentParsed
+digestDocument :: PDFDocumentExploded -> PDFDocumentParsed
 digestDocument inDoc = PDFDocumentParsed {
         pageList = pages,
         globals = globs
     } where
-        globs = extractGlobals inDoc
-        pages = getDocumentPages inDoc globs
+        globs = undefined -- extractGlobals inDoc
+        pages = Prelude.map parsePage (flattenPageTree inDoc globs)
 
+extractGlobals :: PDFDocument -> PDFGlobals
+extractGlobals _d = PDFGlobals {
+    } where 
+        myRoot = PDFString "todo: extract globals" -- error "todo: extract globals"
+
+parsePage :: PDFObject -> PDFPageParsed
+parsePage (PDFDict pageDict) = PDFPageParsed {
+        fonts     = fontsDict,
+        resources = resourcesDict,
+        contents  = cstream,
+        mediaBox  = mediab,
+        cropBox   = cropb
+    } where
+        resourcesDict = case Map.lookup (PDFKey "Resources") pageDict of
+            Just rd@(PDFDict resDict) -> resDict
+            _ -> error "Page missing resources dictionary in parsePage"
+        fontsDict = case Map.lookup (PDFKey "Font") resourcesDict of
+            Just fd@(PDFDict fontDict) -> fontDict
+            _ -> Map.empty
+        cstream = case Map.lookup (PDFKey "Contents") pageDict of
+            Just st@(PDFStream s) -> st
+            _ -> emptyStream
+        mediab = case Map.lookup (PDFKey "MediaBox") pageDict of
+            Just (PDFArray list1) -> parseBBox list1
+            _ -> NullBox
+        cropb = case Map.lookup (PDFKey "CropBox") pageDict of
+            Just (PDFArray list2) -> parseBBox list2
+            _ -> NullBox
+parsePage _ = error "page is not a dictionary in parsePage(!?)"
+
+parseBBox :: [PDFObject] -> PDFBox
+parseBBox ((PDFInt a): ((PDFInt b): ((PDFInt c): ((PDFInt d): [])))) = Quad a b c d
+parseBBox _ = NullBox -- throw an error someday?
+
+flattenPageTree :: PDFDocumentExploded -> PDFObject -> [PDFObject]
+flattenPageTree (PDFDict catalogDict) _ = pageList where
+    root = case Map.lookup (PDFKey "Root") catalogDict of 
+        Just (PDFDict pageTree) -> case Map.lookup (PDFKey "Pages") pageTree of
+            Just r@(PDFDict rootOfTree) -> r
+            _ -> error "bad value in 'Pages' key to digestPageTree"
+        _ -> error "bad value in 'Root' key to digestPageTree"
+    pageList = flattenPageTree' root
+flattenPageTree _ _ = error "page node is not a dictionary in flattenPageTree"
+-- takes a Page tree node that is either of Type "Page" or "Pages" and collapses
+-- it into an array of Pages
+-- TODO: test it on a non-flat page tree. Bummer, need to shift to ByteStreams,
+-- because "Real PDFs are not strings, but rather are are binary files". Shoot!
+flattenPageTree' :: PDFObject -> [PDFObject]
+flattenPageTree' (PDFArray arr) = arr
+flattenPageTree' obj@(PDFDict d)    = case Map.lookup (PDFKey "Type") d of
+    Just (PDFSymbol "Pages") -> listOfKids where
+        kidTrees = case Map.lookup (PDFKey "Kids") d of 
+            Just arr@(PDFArray kidArray) -> kidArray
+            _ -> error "wonky Pages node in Page Tree"
+        listOfKids = concat (Prelude.map flattenPageTree' kidTrees) 
+    Just (PDFSymbol "Page") -> [obj]
+    _ -> error "gak: neither Page nor Pages in digestPageTree'"
+flattenPageTree' x = [(PDFError "how did this get into digestPageTree")]
+
+-- APRIL 2011 TODO: take a page array, and turn it into a proper page tree!!
+{-
 flattenDocument :: PDFDocumentParsed -> PDFDocument
 flattenDocument (PDFDocumentParsed p _g) = PDFDocument {
         catalogDict = catalog,
@@ -107,104 +170,7 @@ flattenPage :: PDFPageParsed -> PDFObject
 flattenPage pp = PDFDict pageDict where
     pageDict = (fromList pageDictList)
     pageDictList = [(PDFKey "Fonts", PDFDict (fonts pp)), (PDFKey "Resources", PDFDict (resources pp)), (PDFKey "Contents", (contents pp))]
-
-extractGlobals :: PDFDocument -> PDFGlobals
-extractGlobals _d = PDFGlobals {
-    } where 
-        myRoot = PDFString "todo: extract globals" -- error "todo: extract globals"
-
--- TODO leftoff
--- take a document, extract its page tree and flatten it to a PageList
--- called by digestDocument
-getDocumentPages :: PDFDocument -> PDFGlobals -> PDFPageList
-getDocumentPages d _g = pages where
-    catalog = case catalogDict d of
-        PDFDict m -> m
-        _         -> error "missing/invalid catalog dict"
-    root = case Map.lookup (PDFKey "Pages") catalog of
-        Nothing                   -> error "missing root in catalog dictionary"
-        Just (PDFReference r gen) -> traversePDFReference (PDFReference r gen) d
-        _                         -> error "malformed catalog dictionary"
-    pages = flattenPageTree d root
-    
--- pageTrees are arrays of either pages, or arrays of pages
--- concatenate them all, recursively
-
-flattenPageTree :: PDFDocument -> PDFObject -> PDFPageList
-
-flattenPageTree doc (PDFArray a) = Prelude.map (parsePage doc) a
-
---    flattenPageTree doc (PDFArray a) = case head a of 
---        PDFDict d -> Prelude.map (parsePage doc) a
---        _ -> error ("bad page tree element in flattenPageTree" ++ (show a))
-
-
-flattenPageTree doc (PDFDict d) = case Map.lookup (PDFKey "Kids") d of
-        Just (PDFArray k) -> flattenPageTree doc (PDFArray k)
-        _            -> error "bad value of Kids array"
-
-flattenPageTree _ _ = error "bad page tree in flattenPageTree: "
-
--- LEFTOFF: TODO: where are Fonts kept? :-) 
--- XXX
-parsePage :: PDFDocument -> PDFObject -> PDFPageParsed
-parsePage doc (PDFReference r g) = parsePage doc (traversePDFReference (PDFReference r g) doc)
-parsePage doc (PDFDict d) = PDFPageParsed {
-        fonts = fontsMap,
-        resources = resourcesMap,
-        contents = contentsObject,
-        parent = PDFNull
-    } where
-        resourcesMap = case Map.lookup (PDFKey "Resources") d of
-            Nothing -> Map.empty -- crawl up page tree in this case?
-            Just (PDFDict r) -> r 
-            Just (PDFReference r g) -> case (traversePDFReference (PDFReference r g) doc) of 
-                (PDFDict r') -> r'
-                _            -> error (" parsePage found a not-dictionary ")
-            _ -> error ("bad resources in parsePage" ++ (show d))
-        contentsObject = case Map.lookup (PDFKey "Contents") d of 
-            Nothing -> PDFNull
-            Just c -> c
-        fontsMap = case Map.lookup (PDFKey "Fonts") resourcesMap of
-            Nothing -> error ("unable to find fonts in " ++ (show resourcesMap))
-            Just (PDFDict f) -> f
-            _ -> error "bad font in parsePage"
-
-parsePage doc (PDFPageRaw pr) = parsePage doc pr
-parsePage _ p = error ("internal error: parsePage called on non-dict" ++ (show p))
-
-getPageTree :: PDFDocument -> PDFObject
-getPageTree d = traversePDFReference (getPageTreeRef d) d
-
-getPageTreeRef :: PDFDocument -> PDFObject
-getPageTreeRef (PDFDocument catalogDictRef objList ) = pageTreeRef where
-    catalogDictMap = case (traversePDFReference catalogDictRef 
-                            (PDFDocument undefined objList )) of
-        (PDFDict dict)  -> dict
-        foo             -> fromList ([((PDFKey "error"), foo)])
-    pageTreeRef = fromMaybe (PDFError (show catalogDictMap)) 
-                            (Map.lookup (PDFKey "Pages") catalogDictMap)
-
--- getPage pageTree n returns the nth PDFPage object in the document
-getPage :: PDFObject -> Int -> Maybe PDFObject
-getPage (PDFArray []) _ = undefined -- signal an error
-getPage (PDFArray (treeNode:restNodes))  n = 
-   case (dictLookup "Type" treeNode "bad type in getPage")  of
-     (PDFSymbol "Page")
-          | n == 0    -> Just treeNode
-          | otherwise -> getPage (PDFArray restNodes) (n-1)
-     (PDFSymbol "Pages")   ->
-          case (dictLookup "Kids" treeNode "no children array in node") of
-            (PDFArray childArray) ->
-              case (dictLookup "Count" treeNode "invalid Pages node (no count)") of
-                (PDFInt countPages) 
-                  | n < countPages  -> getPage (PDFArray childArray) (countPages - n) -- go deeper
-                  | otherwise       -> getPage (PDFArray restNodes) (n - countPages) -- skip this node
-                _ -> Nothing -- "bad count in page tree"
-            _ -> Nothing -- "missing child array in page tree"
-     _ -> Nothing -- "bad Dict type in getPage"
-getPage _ _ = error "unexpected page structure"
-
+-}
 
 -- parsec functions
 run :: Show a => Parser a -> String -> IO ()

@@ -6,8 +6,9 @@ import Text.PDF.Parser
 import System.IO
  
 main :: IO ()
--- main = buildAndWriteFile "foo.pdf"
-main = parseAndWriteFile "foo.pdf" "bar.pdf"
+main = buildAndWriteFile "fooo.pdf" 
+-- main = parseAndWriteFile "/Users/dylanjames/Documents/philosophy/Lisi-theoryOfEverything-0711.0770.pdf" "undefined"
+-- main = parseAndWriteFile "foo.pdf" "bar.pdf"
 
 buildAndWriteFile :: String -> IO ()
 buildAndWriteFile outName = do
@@ -15,29 +16,30 @@ buildAndWriteFile outName = do
     outFile <- openFile outName WriteMode
     _ <- printPDFDocument outFile d
     hClose outFile
-    return ()
+    return ()    
 
-buildDoc :: PDFDocument
-buildDoc = rundoc $ do
-    beginPage 
-    moveTo 100 500
-    setFont "Helvetica" 24
-    printString "Hello World"
-    endPage
+buildPage :: String -> Int -> PDF ()
+buildPage msg i = do
     beginPage
     moveTo 100 500
-    setFont "Times-Roman" 24
-    printString "Goodbye World"
+    setFont "Helvetica" 24
+    printString (msg ++ (show i))
     endPage
+    
+buildDoc :: PDFDocument
+buildDoc = rundoc $ do
+    mapM_ (buildPage "Hello World ") [1..10]
     endDocument
 
 parseAndWriteFile :: String -> String -> IO ()
 parseAndWriteFile inName outName = do
     -- inFileHandle <- openFile inName ReadMode
     inString <- readFile inName
-    let contents = PDFContents inString
-    let parsed@(PDFDocument root objs) = parsePDF contents
+    let fileContents = PDFContents inString
+    let parsed@(PDFDocument root _) = parsePDF fileContents
+    let dig = digestDocument (explodePDF parsed)
     outFile <- openFile outName WriteMode
-    -- _ <- printPDFDocument outFile parsed
+    _ <- printPDFDocument outFile parsed
     putStrLn ("before 'sploding: " ++ show root)
-    putStrLn ("after 'sploding:" ++ show (explodePDF parsed))
+    putStrLn ("after 'sploding:" ++  (ppPDFObject 0 (explodePDF parsed)))
+    putStrLn ("\n\nafter digestion:" ++ (concat (map ppPDFPage (pageList dig))))

@@ -55,6 +55,7 @@ joinPDFDocument = undefined
 filterPages :: (PDFObject -> Bool) -> PDFDocument -> PDFDocument
 filterPages = undefined
 
+{-
 applyPageTransformer :: (PDFPageParsed -> PDFPageParsed) -> PDFDocumentParsed -> PDFDocumentParsed
 applyPageTransformer transformer inDoc = inDoc {
         pageList = Prelude.map transformer (pageList inDoc) 
@@ -73,6 +74,7 @@ rotatePage degrees inDoc inPage = inPage {
             str@PDFStream{} -> doRotate degrees (PDFArray [str]) pageHeight
             PDFNull -> PDFNull
             o -> error ("bad contents type found in rotate page" ++ (show o))
+-}
 
 -- this function is asking to be higher-order, instead of string manipulating
 doRotate :: Float -> PDFObject -> Float -> PDFObject

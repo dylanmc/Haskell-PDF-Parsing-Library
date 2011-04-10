@@ -60,8 +60,20 @@ pageTreeFromArray arr =
         ((PDFKey "Kids"), (PDFArray arr))
     ]))
 
-showPDFObject :: PDFObject -> String
+flattenPage :: PDFPageParsed -> PDFObject
+flattenPage page = (PDFDict (fromList[
+        ((PDFKey "Contents"), (contents page)),
+        ((PDFKey "Resources"), (PDFDict (resources page))), -- HRMM: fonts belong inside here. 
+        ((PDFKey "Type"), (PDFSymbol "Page")),
+        ((PDFKey "MediaBox"), boxToPDFObject (mediaBox page)) 
+        -- TODO, don't even want the BBox keys for missing boxes (cropbox, etc)
+    ]))
 
+boxToPDFObject :: PDFBox -> PDFObject
+boxToPDFObject (Quad a b c d) = PDFArray [(PDFInt a),(PDFInt b),(PDFInt c),(PDFInt d)]
+boxToPDFObject _ = PDFNull
+    
+showPDFObject :: PDFObject -> String
 showPDFObject (PDFString s) =  "(" ++ (escapeString s) ++ ")" 
 
 showPDFObject (PDFSymbol s) =  "/" ++ s 
@@ -87,6 +99,36 @@ showPDFObject (PDFComment str) = "%" ++ (show str)
 showPDFObject (PDFXObject _) = ("pdfxobject ??")
 showPDFObject _ = undefined "can't showPDFObject a non PDFString object (yet)"
 
+indent :: Int -> String
+indent n = concat $ replicate n "    " 
+
+-- the pp functions are just for debugging, they have no use in actual PDF production
+ppPDFKey :: Int -> PDFKey -> String
+ppPDFKey i (PDFKey s) = (indent i) ++ "/" ++ s
+
+ppPDFObject :: Int -> PDFObject -> String
+ppPDFObject i (PDFDict m) = (indent i) ++ "Dict:\n" ++ (concat (Prelude.map (ppPDFObjectPair (i+1)) (assocs m )))
+
+ppPDFObject i (PDFArray a) = (indent i) ++ "[" ++ (concat (Prelude.map (ppPDFObject (i+1)) a)) ++ "]"
+
+ppPDFObject i (PDFSymbol s) = "/" ++ s ++ " "
+ppPDFObject i (PDFInt n) = (show n) ++ " "
+
+ppPDFObject i o = (indent i) ++ (show o) ++ " "
+
+ppPDFObjectPair :: Int -> (PDFKey, PDFObject) -> String
+ppPDFObjectPair i (key, value) = (ppPDFKey i key) ++ " -> " ++ (ppPDFObject i value) ++ "\n"
+
+ppPDFObjects :: Int -> [PDFObject] -> String
+ppPDFObjects i objs = (concat (Prelude.map (ppPDFObject i) objs))
+
+ppPDFPage :: PDFPageParsed -> String
+ppPDFPage page = 
+    "PDFPageParsed:\n" ++
+    "Fonts: " ++ (ppPDFObject 1 (PDFDict (fonts page))) ++ "\n" ++
+    "Contents: " ++ (ppPDFObject 0 (contents page)) ++ "\n" ++
+    "MediaBox: " ++ (show (mediaBox page)) ++ "\n"
+    
 showKeyObject :: PDFKey -> PDFObject -> String -> String
 showKeyObject (PDFKey key) obj initString = initString ++ 
     "/" ++ key ++ " " ++ (showPDFObject obj) ++ "\n"
@@ -210,6 +252,8 @@ buildPageTree doc pgArray = doc'''' where
     doc'''' = doc''' { 
         catalogDict = pageTreeNode parentRef PDFNull 
     }
+    
+
 
 -- takes an array of Page objects, a parent reference, and a PDFDocument
 -- sets the parent of each page object to the parent ref, inserts that modified object 
