@@ -3,16 +3,21 @@ module Main(main) where
 import Text.PDF.Types
 import Text.PDF.Document
 import Text.PDF.Parser
+import Text.PDF.Utils
 import System.IO
  
 main :: IO ()
 main = buildAndWriteFile "fooo.pdf" 
--- main = parseAndWriteFile "/Users/dylanjames/Documents/philosophy/Lisi-theoryOfEverything-0711.0770.pdf" "undefined"
--- main = parseAndWriteFile "foo.pdf" "bar.pdf"
+-- main = parseAndWriteFile "fooo.pdf" "bar.pdf"
 
 buildAndWriteFile :: String -> IO ()
 buildAndWriteFile outName = do
-    let d = buildDoc
+    let root = explodePDF (buildDoc 20)
+    print "buildDoc:"
+    print root
+    let d = regularizeNesting root
+    print "regularized:"
+    print d
     outFile <- openFile outName WriteMode
     _ <- printPDFDocument outFile d
     hClose outFile
@@ -26,9 +31,9 @@ buildPage msg i = do
     printString (msg ++ (show i))
     endPage
     
-buildDoc :: PDFDocument
-buildDoc = rundoc $ do
-    mapM_ (buildPage "Hello World ") [1..10]
+buildDoc :: Int -> PDFDocument
+buildDoc i = rundoc $ do
+    mapM_ (buildPage "Hello World ") [1..i]
     endDocument
 
 parseAndWriteFile :: String -> String -> IO ()

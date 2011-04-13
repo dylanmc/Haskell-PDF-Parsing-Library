@@ -19,14 +19,14 @@ import Data.Array as Array
 import Data.Maybe 
 
 import Text.PDF.Types
-
+        
 traversePDFReference :: PDFObject -> PDFDocument -> PDFObject
 traversePDFReference (PDFReference objNum _g) (PDFDocument _ objMap ) = 
     fromMaybe (PDFError ("Unable to find object " ++ (show objNum))) (Map.lookup objNum objMap)
 traversePDFReference _ _ = error "Bad arguments to traversePDFReference"
     
--- I decided to make all nodes in the tree be created with this function,
--- toggled by whether parent is PDFNull or not.
+-- all nodes in the tree be created with this function,
+-- their type (page vs pages) is toggled by whether parent is PDFNull or not.
 
 -- create the root node: it has no parent 
 -- pageTreeNode pagesArray parent -> PDFDict
@@ -37,17 +37,40 @@ pageTreeNode pageTreeRef PDFNull = PDFDict (fromList [
 
 -- this is all internal nodes, which have parents
 pageTreeNode pagesArrayRef parentRef = PDFDict (fromList [
-            ((PDFKey "Type"), (PDFSymbol "Catalog")), 
+            ((PDFKey "Type"), (PDFSymbol "Pages")), 
             ((PDFKey "Pages"), pagesArrayRef),
             ((PDFKey "Parent"), parentRef)])
 
-addObjectGetRef :: PDFObject -> PDFDocument -> (PDFObject, PDFDocument)
-addObjectGetRef (PDFReference n g) d = ((PDFReference n g), d)
-addObjectGetRef pdfobj (PDFDocument root oldMap ) = (newRef, newDoc) where
-    newRef = (PDFReference objNum 0)
-    newDoc = (PDFDocument root newMap )
-    newMap = Map.insert objNum pdfobj oldMap
-    objNum = (Map.size oldMap + 1)
+-- the pp functions are just for debugging, they have no use in actual PDF production
+ppPDFKey :: Int -> PDFKey -> String
+ppPDFKey i (PDFKey s) = (indent i) ++ "/" ++ s
+
+ppPDFObject :: Int -> PDFObject -> String
+ppPDFObject i (PDFDict m) = (indent i) ++ "Dict:\n" ++ (concat (Prelude.map (ppPDFObjectPair (i+1)) (Map.assocs m )))
+
+ppPDFObject i (PDFArray a) = (indent i) ++ "[" ++ (concat (Prelude.map (ppPDFObject (i+1)) a)) ++ "]"
+
+ppPDFObject i (PDFSymbol s) = "/" ++ s ++ " "
+ppPDFObject i (PDFInt n) = (show n) ++ " "
+
+ppPDFObject i o = (indent i) ++ (show o) ++ " "
+
+ppPDFObjectPair :: Int -> (PDFKey, PDFObject) -> String
+ppPDFObjectPair i (key, value) = (ppPDFKey i key) ++ " -> " ++ (ppPDFObject i value) ++ "\n"
+
+ppPDFObjects :: Int -> [PDFObject] -> String
+ppPDFObjects i objs = (concat (Prelude.map (ppPDFObject i) objs))
+
+ppPDFPage :: PDFPageParsed -> String
+ppPDFPage page = 
+    "PDFPageParsed:\n" ++
+    "Contents: " ++ (ppPDFObject 0 (contents page)) ++ "\n" ++
+    "Resources: " ++ (ppPDFObject 0 (PDFDict (resources page))) ++
+    "MediaBox: " ++ (show (mediaBox page)) ++ "\n"
+
+indent :: Int -> String
+indent n = concat $ replicate n "    " 
+
 
 joinPDFDocument :: PDFDocument -> PDFDocument -> PDFDocument
 joinPDFDocument = undefined

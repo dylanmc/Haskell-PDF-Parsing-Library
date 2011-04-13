@@ -1,7 +1,7 @@
 --------------------------------------------------------------------
 -- |
 -- Module      : Text.PDF.Parser
--- Description : Reading in and parsing PDF documents
+-- Description : Reading and parsing PDF documents
 -- Copyright   : (c) Dylan McNamee, 2008 - 2011
 -- License     : BSD3
 --
@@ -100,7 +100,7 @@ extractGlobals _d = PDFGlobals {
 
 parsePage :: PDFObject -> PDFPageParsed
 parsePage (PDFDict pageDict) = PDFPageParsed {
-        fonts     = fontsDict,
+        -- fonts     = fontsDict, -- XXX gone because fonts are in rsrc. it's confusing to duplicate
         resources = resourcesDict,
         contents  = cstream,
         mediaBox  = mediab,
@@ -109,9 +109,9 @@ parsePage (PDFDict pageDict) = PDFPageParsed {
         resourcesDict = case Map.lookup (PDFKey "Resources") pageDict of
             Just rd@(PDFDict resDict) -> resDict
             _ -> error "Page missing resources dictionary in parsePage"
-        fontsDict = case Map.lookup (PDFKey "Font") resourcesDict of
+        {- fontsDict = case Map.lookup (PDFKey "Font") resourcesDict of
             Just fd@(PDFDict fontDict) -> fontDict
-            _ -> Map.empty
+            _ -> Map.empty -}
         cstream = case Map.lookup (PDFKey "Contents") pageDict of
             Just st@(PDFStream s) -> st
             _ -> emptyStream

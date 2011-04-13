@@ -32,11 +32,6 @@ data PDFDocument =
         objectList  :: PDFObjectMap  -- a map from objectNum -> PDFObject
     } deriving (Show)
 
--- the following types hint at PDF parsing functions to come.
--- I've got them written, but they're a mess, so I'm leaving them 
--- out for the initial submission.  It could be that these data types
--- were the wrong first step, but we'll cross that bridge as I clean things up.
-
 data PDFDocumentParsed = 
     PDFDocumentParsed {
         pageList :: PDFPageList, -- later PDFPageList
@@ -51,7 +46,7 @@ data PDFGlobals =
 data PDFPageParsed = 
     PDFPageParsed {
         resources :: PDFDictionaryMap,
-        fonts     :: PDFDictionaryMap,
+        -- fonts     :: PDFDictionaryMap,
         contents  :: PDFObject,
         mediaBox  :: PDFBox,
         cropBox   :: PDFBox -- other boxes too? 
@@ -65,9 +60,11 @@ data PDFFontParsed =
     
 emptyPage :: PDFPageParsed
 emptyPage = PDFPageParsed {
-    fonts = Map.empty,
+    -- fonts = Map.empty,
     resources = Map.empty,
-    contents = emptyStream
+    contents = emptyStream,
+    mediaBox = NullBox,
+    cropBox = NullBox
 }
 
 -- bounding boxes are in absolute point coordinates (llx, lly, urx, ury)
@@ -96,3 +93,7 @@ data PDFObject =
     PDFNull 
     deriving (Show,Ord,Eq)
 
+isAtomic :: PDFObject -> Bool
+isAtomic (PDFDict _)  = False
+isAtomic (PDFArray _) = False
+isAtomic _            = True
