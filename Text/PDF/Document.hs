@@ -2,7 +2,7 @@
 -- |
 -- Module      : Text.PDF.Document
 -- Description : Functions for manipulating PDF content.
--- Copyright   : (c) Dylan McNamee, 2008, 2009
+-- Copyright   : (c) Dylan McNamee, 2008, 2009, 2011
 -- License     : BSD3
 --
 -- Maintainer: Dylan McNamee <dylan@galois.com>
@@ -57,11 +57,11 @@ pageTreeFromArray arr =
 
 flattenPage :: PDFPageParsed -> PDFObject -> PDFObject
 flattenPage page parentRef = (PDFDict (fromList[
+        ((PDFKey "Parent"), parentRef), 
         ((PDFKey "Contents"), (contents page)),
         ((PDFKey "Resources"), (PDFDict (resources page))), -- HRMM: fonts belong inside here. 
         ((PDFKey "Type"), (PDFSymbol "Page")),
-        ((PDFKey "MediaBox"), boxToPDFObject (mediaBox page)),
-        ((PDFKey "Parent"), parentRef) 
+        ((PDFKey "MediaBox"), boxToPDFObject (mediaBox page))
         -- TODO, don't even want the BBox keys for null boxes (cropbox, etc)
     ]))
 
@@ -106,26 +106,27 @@ showArrayObject initString obj = initString ++
     (showPDFObject obj) ++ " "
 
 -- Components for creating a PDF document
-fontDict :: String -> PDFObject
-fontDict name = 
+fontDict :: String -> String -> PDFObject
+fontDict name shortcut = 
     PDFDict (      -- ... this dict is the definition of it
         fromList [
             ((PDFKey "Type"), (PDFSymbol "Font")),
             ((PDFKey "Subtype"), (PDFSymbol "Type1")),
             ((PDFKey "BaseFont"), (PDFSymbol name)),
+            ((PDFKey "Name"), (PDFSymbol shortcut)),
             ((PDFKey "Encoding"), (PDFSymbol "MacRomanEncoding"))
         ] )
 
 -- add a mapping between a font shortcut and a font with a name, return new mapping 
 addFontToDict :: String -> String -> PDFObject -> PDFObject
-addFontToDict shortcut name oldDict = 
-    addToDict oldDict shortcut (fontDict name)   
+addFontToDict name shortcut oldDict = 
+    addToDict oldDict shortcut (fontDict name shortcut)   
     -- someday silently don't add this if this shortcut's already in the dict
         
 type PDF = State.State PDFState
 data PDFState = 
     PDFState {
-        masterDocument :: PDFDocument,
+        masterDocument :: PDFObjectTreeFlattened,
         streamAccum :: PDFObject, 
         rsrcDict :: PDFObject, 
         fontsDict :: PDFObject,
@@ -144,7 +145,7 @@ putPDF s = State.put s
 --   still a bit mysterious, but I think I can handle it.  The rest of the
 --   is either monadic, which makes sense, or pure, which makes more sense.
 -- It's still this bridge code that throws me a bit.
-rundoc :: PDF () -> PDFDocument
+rundoc :: PDF () -> PDFObjectTreeFlattened
 rundoc m = d where
     myState = State.execState m newPDFState
     d = masterDocument myState
@@ -161,7 +162,7 @@ newPDFState = PDFState {
         fontsDict = PDFDict (fromList []),
         pagesArray = []
     } where
-        doc = (PDFDocument PDFNull Map.empty )
+        doc = (PDFObjectTreeFlattened PDFNull Map.empty )
 
 -- todo: I like putting the media box as an arg to beginPage. HMMMM.
 beginPage :: PDF ()
@@ -202,26 +203,25 @@ endDocument = do
 globalProcSet :: PDFObject    
 globalProcSet = PDFArray [(PDFSymbol "PDF"), (PDFSymbol "Text") ]
 
-globalPageBox = Quad 0 0 612 792
+globalPageBox = Quad 0 0 300 300
 
--- buildPageTree takes a PDFDocument and an array of PDFPageParsed objects
--- returns a new PDFDocument with a page tree added
+-- buildPageTree takes a PDFObjectTreeFlattened and an array of PDFPageParsed objects
+-- returns a new PDFObjectTreeFlattened with a page tree added
 --   we modify the PDFPage objects to set their parent values to the newly created parent node(s)
-buildPageTree :: PDFDocument -> [PDFPageParsed] -> PDFDocument
+buildPageTree :: PDFObjectTreeFlattened -> [PDFPageParsed] -> PDFObjectTreeFlattened
 buildPageTree doc pgArray = doc'''' where
     (newPagesArray, doc') = buildArrayOfRefs pgArray parentRef doc
     (parentRef, doc'') = addDocObjectGetRef (pageTreeFromArray newPagesArray) doc'
     (_pagesArrayRef, doc''') = addDocObjectGetRef (PDFArray newPagesArray) doc''
     doc'''' = doc''' { 
         catalogDict = pageTreeNode parentRef PDFNull 
+        -- addObjectGetRef :: PDFObjectMap -> PDFObject -> (PDFObjectMap, PDFObject)
     }
-    
 
-
--- takes an array of Page objects, a parent reference, and a PDFDocument
+-- takes an array of Page objects, a parent reference, and a PDFObjectTreeFlattened
 -- sets the parent of each page object to the parent ref, inserts that modified object 
 --    into the document, and returns the array of refs along with the new document
-buildArrayOfRefs :: [PDFPageParsed] -> PDFObject -> PDFDocument -> ([PDFObject], PDFDocument)
+buildArrayOfRefs :: [PDFPageParsed] -> PDFObject -> PDFObjectTreeFlattened -> ([PDFObject], PDFObjectTreeFlattened)
 buildArrayOfRefs [] _ doc = ([], doc)
 buildArrayOfRefs (node : rest) parentRef doc = ((nodeRef : restRefs), doc'') where
     (nodeRef, doc') = addDocObjectGetRef newNode doc
@@ -231,27 +231,56 @@ buildArrayOfRefs (node : rest) parentRef doc = ((nodeRef : restRefs), doc'') whe
 -- 
 -- The spec says complex objects (arrays, dicts) can either have refs or objects inside them
 -- regularize turns everything that's not a simple atomic object into a reference.
-regularizeNesting :: PDFObject -> PDFDocument
-regularizeNesting root = (PDFDocument newRoot unNestState) where
+-- 
+flattenDocument :: PDFObject -> PDFObjectTreeFlattened
+flattenDocument root = (PDFObjectTreeFlattened newRoot unNestState) where
     (newRoot, unNestState) = State.runState (traverseAndUnNest root) Map.empty
 
+-- The state monad is helping us thread the accumulated ObjectMap through the flattening process
+-- without having to pass it all over the place.
 type UnNest = State.State PDFObjectMap
+
 traverseAndUnNest :: PDFObject -> UnNest PDFObject
-traverseAndUnNest (PDFArray objs) = PDFArray `fmap` mapM enPointerify objs
-traverseAndUnNest (PDFDict myDict) = PDFDict `fmap` T.mapM enPointerify myDict
-traverseAndUnNest a = enPointerify a
+traverseAndUnNest (PDFArray objs) = PDFArray `fmap` mapM (enPointerify PDFNull) objs
+traverseAndUnNest (PDFDict myDict) = PDFDict `fmap` T.mapM (enPointerify PDFNull) myDict
+traverseAndUnNest a = (enPointerify PDFNull) a
 
-enPointerify :: PDFObject -> UnNest PDFObject
+enPointerify :: PDFObject -> PDFObject -> UnNest PDFObject
 
-enPointerify (PDFArray objs) = do
-    objs' <- mapM enPointerify objs -- could also use T.mapM here
-    reference (PDFArray objs')
+enPointerify parent ia@(PDFArray objs) = do
+    objs' <- mapM (enPointerify parent) objs -- could also use T.mapM here
+    case (length objs > 4) of
+        True -> do
+            reference (PDFArray objs')
+        False -> return (PDFArray objs')
 
-enPointerify (PDFDict objs) = do
-    objs' <- T.mapM enPointerify objs
-    reference (PDFDict objs')
+enPointerify parent node@(PDFDict objs) = do
+    myReference <- reference PDFNull -- get a placeholder reference for my kids' "parent" reference
+    objs'  <- T.mapM (enPointerify myReference) objs 
+    let objs'' = case (isPageTreeNode node) of
+                    True -> addParentPointer objs' parent
+                    False -> objs'
+    clobberReference (PDFDict objs'') myReference
 
-enPointerify o = return o
+-- ok, this is wack: if I don't "enpointerify" streams, it's not a valid PDF.
+-- I'm having a hard time finding where this should be true in the spec. Sigh. that's
+-- a day of my life I'd like back. :-/
+enPointerify parent str@(PDFStream s) = do
+    reference str
+    
+enPointerify _parent o = return o
+
+isPageTreeNode :: PDFObject -> Bool
+isPageTreeNode (PDFDict dictMap) = case (Map.lookup (PDFKey "Type") dictMap) of 
+        Just (PDFSymbol "Page")  -> True
+        Just (PDFSymbol "Pages") -> True
+        Just _                   -> False
+        Nothing                  -> False
+isPageTreeNode _ = False
+
+addParentPointer :: PDFDictionaryMap -> PDFObject -> PDFDictionaryMap
+addParentPointer inDict PDFNull = inDict
+addParentPointer inDict parentPtr = (Map.insert (PDFKey "Parent") parentPtr inDict)
 
 reference :: PDFObject -> UnNest PDFObject
 reference obj = do
@@ -259,28 +288,15 @@ reference obj = do
     let (dict',ref) = addObjectGetRef dict obj
     State.put dict'
     return ref
-    
-{- Note to self, above is same as:
- traverseAndUnNest (PDFArray objs) = do
-    monadicThingy <- mapM traverseAndUnNest objs
-    return (PDFArray monadicThingy)
--}
-{-
-recursivelyParse :: (Map Int PDFObject) -> PDFObject -> PDFObject
-recursivelyParse _ (PDFString s) = (PDFString s)
-recursivelyParse _ (PDFSymbol s) = (PDFSymbol s)
-recursivelyParse _ (PDFInt i)    = (PDFInt i)
 
--- would like to just do Map.map, but there are cycles in the "tree" caused by those ding-dang
--- parent pointers, so filter them out first.
-recursivelyParse objectMap (PDFDict d) =  (PDFDict (Map.map (recursivelyParse objectMap) d')) where
-    d' = Map.filterWithKey (\k _ -> isn'tParent k) d
-    isn'tParent (PDFKey "Parent") = False
-    isn'tParent _ = True
--}
+clobberReference :: PDFObject -> PDFObject -> UnNest PDFObject
+clobberReference object reference = do
+    dict <- State.get
+    State.put (clobberObjectWithRef dict object reference)
+    return reference
 
-addDocObjectGetRef :: PDFObject -> PDFDocument -> (PDFObject, PDFDocument)
-addDocObjectGetRef obj (PDFDocument root oldMap) = (objRef, (PDFDocument root newMap)) where
+addDocObjectGetRef :: PDFObject -> PDFObjectTreeFlattened -> (PDFObject, PDFObjectTreeFlattened)
+addDocObjectGetRef obj (PDFObjectTreeFlattened root oldMap) = (objRef, (PDFObjectTreeFlattened root newMap)) where
     (newMap, objRef) = addObjectGetRef oldMap obj
 
 -- this should be in my monad for recursivelyUnNest
@@ -290,7 +306,15 @@ addObjectGetRef oldMap pdfobj = (newMap, newRef) where
     newRef = (PDFReference objNum 0)
     newMap = Map.insert objNum pdfobj oldMap
     objNum = (Map.size oldMap + 1)
+    
+clobberObjectWithRef :: PDFObjectMap -> PDFObject -> PDFObject -> PDFObjectMap
+clobberObjectWithRef oldMap newObject (PDFReference n g) = Map.insert n newObject oldMap
+clobberObjectWithRef _ _ _ = error ("internal error: bad args to clobberObjectWithRef")
 
+enpointerifyRoot :: PDFObjectTreeFlattened -> PDFObjectTreeFlattened
+enpointerifyRoot (PDFObjectTreeFlattened rootDict oldMap) = (PDFObjectTreeFlattened dictRef newMap) where
+    (newMap, dictRef) = addObjectGetRef oldMap rootDict
+    
 -- Now for a bunch of imaging operations.
 moveTo :: Int -> Int -> PDF ()
 moveTo x y = do
@@ -306,11 +330,11 @@ printString s = do
     let ns = appendStream (streamAccum myState) ("(" ++ s ++ ") Tj")
     putPDF (myState {streamAccum = ns})
 
-setFont :: String -> Int -> PDF ()
-setFont name fontSize = do
+setFont :: String -> String -> Int -> PDF ()
+setFont name shortcut fontSize = do
     myState <- State.get
-    let s' = appendStream (streamAccum myState) ("/" ++ name ++ " " ++ (show fontSize) ++ " Tf")
-    let fonts' = addFontToDict name name (fontsDict myState)
+    let s' = appendStream (streamAccum myState) ("/" ++ shortcut ++ " " ++ (show fontSize) ++ " Tf")
+    let fonts' = addFontToDict name shortcut (fontsDict myState)
     let myState' = myState {
         streamAccum = s',
         fontsDict = fonts'
@@ -320,19 +344,20 @@ setFont name fontSize = do
 data ObjectIndices = ObjectIndices [Int] deriving (Show)
 
 -- print the first line, and kick off printing the big "list of objects"
-printPDFDocument :: Handle -> PDFDocument -> IO PDFDocument
-printPDFDocument h d = do
+printFlatTree :: Handle -> PDFObjectTreeFlattened -> IO PDFObjectTreeFlattened
+printFlatTree h d@(PDFObjectTreeFlattened id om) = do
     let prefixLen = length header14
     hPutStr h (header14)
-    ret <- printPDFDocument' h d (ObjectIndices []) prefixLen 1
+    let d' = enpointerifyRoot d
+    ret <- printFlatTree' h d' (ObjectIndices []) prefixLen 1
     return ret
 
 -- empties the PDFObjectList, printing each object as we go, adding
 -- its offset in the output file to "ObjectIndices"
-printPDFDocument' :: Handle -> PDFDocument -> ObjectIndices -> Int -> Int -> IO PDFDocument
-printPDFDocument' 
+printFlatTree' :: Handle -> PDFObjectTreeFlattened -> ObjectIndices -> Int -> Int -> IO PDFObjectTreeFlattened
+printFlatTree' 
         h
-        (PDFDocument _a objectMap )
+        (PDFObjectTreeFlattened _a objectMap )
         (ObjectIndices ixs)  
         currIx
         objNum = case (mapSize >= objNum) of
@@ -340,8 +365,8 @@ printPDFDocument'
                 hPutStr h (prefixStr)
                 hPutStr h (str)
                 hPutStr h (postFixStr)
-                printPDFDocument' h (PDFDocument _a objectMap ) (ObjectIndices (ixs ++ [currIx])) newIx (objNum + 1)
-            False -> printPDFDocument'' h (PDFDocument _a objectMap ) (ObjectIndices ixs) currIx
+                printFlatTree' h (PDFObjectTreeFlattened _a objectMap ) (ObjectIndices (ixs ++ [currIx])) newIx (objNum + 1)
+            False -> printFlatTree'' h (PDFObjectTreeFlattened _a objectMap ) (ObjectIndices ixs) currIx
         where
             mapSize = Map.size objectMap
             o = fromMaybe (PDFError ("Unable to lookup object # " ++ (show objNum))) (Map.lookup objNum objectMap)
@@ -354,16 +379,16 @@ printPDFDocument'
 -- printing the xref table, which is the list of object indices
 -- so this function prints the xref table header, kicks off the 
 -- xref table output, then prints the trailer dict and trailer
-printPDFDocument'' :: Handle -> PDFDocument -> ObjectIndices -> Int -> IO PDFDocument
-printPDFDocument''
+printFlatTree'' :: Handle -> PDFObjectTreeFlattened -> ObjectIndices -> Int -> IO PDFObjectTreeFlattened
+printFlatTree''
         h
-        (PDFDocument rootRef _ )
+        inDoc@(PDFObjectTreeFlattened rootRef _ )
         (ObjectIndices (ixs)) 
         currIx = do
             printXRefIndexes h ixs 0
             let numObjects = 1 + length ixs
             printTrailer h rootRef numObjects currIx 
-            return (PDFDocument rootRef Map.empty ) 
+            return inDoc 
 
 printXRefIndexes :: Handle -> [Int] -> Int -> IO () 
 printXRefIndexes _ [] _ = do

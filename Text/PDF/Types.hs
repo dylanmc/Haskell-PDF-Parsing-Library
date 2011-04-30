@@ -21,13 +21,16 @@ type PDFDictionaryMap = Map PDFKey PDFObject
 type PDFObjectMap = Map Int PDFObject
 type PDFPageList = [PDFPageParsed] 
 
-type PDFDocumentExploded = PDFObject
+-- the following are to distinguish the structure of the tree before and after
+-- explosion and digestion
+type PDFDocumentRoot = PDFObject      
+type PDFTreeExploded = PDFObject
 
 -- this is the pure PDFObject representation of a document. It's useful for generation,
 -- (all you need to do is pretty-print the structure) but not very useful for 
 -- manipulation, because you have much more to parse. 
-data PDFDocument = 
-    PDFDocument {
+data PDFObjectTreeFlattened = 
+    PDFObjectTreeFlattened {
         catalogDict :: PDFObject,    -- the catalog dictionary (the root of the Page Tree & friends)
         objectList  :: PDFObjectMap  -- a map from objectNum -> PDFObject
     } deriving (Show)
@@ -45,7 +48,7 @@ data PDFGlobals =
 
 data PDFPageParsed = 
     PDFPageParsed {
-        resources :: PDFDictionaryMap,
+        resources :: PDFDictionaryMap, -- Soon: PDFKey for the PDFDictTreeSymbolTable
         -- fonts     :: PDFDictionaryMap,
         contents  :: PDFObject,
         mediaBox  :: PDFBox,
@@ -57,6 +60,14 @@ data PDFFontParsed =
         baseFont  :: String,
         otherElts :: PDFDictionaryMap
     } deriving (Show)
+    
+data PDFDictTreeNode = 
+    PDFDictTreeNode {
+        dictMap :: PDFDictTreeSymbolTable,
+        parent  :: PDFKey
+    } deriving (Show)
+    
+type PDFDictTreeSymbolTable = Map PDFKey PDFDictTreeNode
     
 emptyPage :: PDFPageParsed
 emptyPage = PDFPageParsed {

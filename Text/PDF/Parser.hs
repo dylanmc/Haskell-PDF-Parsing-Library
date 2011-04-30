@@ -35,28 +35,34 @@ data PDFContents = PDFContents String deriving (Show)
 --  * find the xref table 
 --  * turn the xref table into a map from integers to PDF Objects
 --  * find and parse the trailer dictionary
---  * starting with the root object, recurse through complex objects, parsing sub- and refered-to sub-objects
+--  * starting with the catalog dict (pointed to by /Root in the trailer dictionary), 
+--    recurse through complex objects, parsing sub- and refered-to sub-objects
 -- This results in a big tree of objects, no pointers, ready for digesting, manipulating, or flattening.
 -- Digesting a PDF file goes like this:
 --  * use the trailer dictionary to find and parse the page tree
 --  * use the page tree to build a list of pages
 --  * for each page, parse it into a PDFPage structure
 
-parsePDF :: PDFContents -> PDFDocument
-parsePDF pdfContents = PDFDocument {
-        catalogDict = rootObject,                                           -- the catalog dictionary
-        objectList = parsedObjectMap                                        -- objectNum -> PDFObject
+parseContents :: PDFContents -> PDFObjectTreeFlattened
+parseContents pdfContents = PDFObjectTreeFlattened {
+        catalogDict = catalogObj,                        -- the root, extracted from the catalog
+        objectList = parsedObjectMap                     -- objectNum -> PDFObject
     } where
-        (xrefEntries, rootObject) = getXRefTable pdfContents
+        (xrefEntries, (PDFDict trailerDict)) = getXRefTable pdfContents
         parsedObjectMap = enMapify $ Prelude.map parseObject' objectStrings
         objectStrings = Prelude.map getObjectString' [1..(Map.size xrefEntries)] -- cheating here - flatten instead
         getObjectString' = getObjectString pdfContents xrefEntries
         parseObject' objStr = case (parse topLevelObject "" objStr) of
             Left err -> error ("malformed top-level PDF object: *** " ++ objStr ++ "ERR:" ++ (show err) ++ "***\n")
             Right obj -> obj
+        catalogObj = case (Map.lookup (PDFKey "Root") trailerDict) of
+            Just rr@(PDFReference n g) -> (parsedObjectMap Map.! n) 
+            Just rd@(PDFDict rdict) -> rd
+            Just er -> error ("bad value for Root object in catalog dictionary" ++ (show er))
+            _ -> error ("no Root key/value in catalog dictionary: " ++ (show trailerDict))
 
-explodePDF :: PDFDocument -> PDFDocumentExploded
-explodePDF (PDFDocument rootObject objects) = (recursivelyParse objects rootObject)
+explodePDF :: PDFObjectTreeFlattened -> PDFTreeExploded
+explodePDF (PDFObjectTreeFlattened rootObject objects) = (recursivelyParse objects rootObject)
 
 enMapify :: [a] -> Map Int a
 enMapify objList = fromList (zip [1..(length objList)] objList)
@@ -85,7 +91,7 @@ recursivelyParse _ o = o
 enMapify _ [] inMap = inMap
 enMapify nextKey [first:rest] = enMapify (nextKey+1) rest (insert nextKey first inMap) -}
 
-digestDocument :: PDFDocumentExploded -> PDFDocumentParsed
+digestDocument :: PDFTreeExploded -> PDFDocumentParsed
 digestDocument inDoc = PDFDocumentParsed {
         pageList = pages,
         globals = globs
@@ -93,7 +99,7 @@ digestDocument inDoc = PDFDocumentParsed {
         globs = undefined -- extractGlobals inDoc
         pages = Prelude.map parsePage (flattenPageTree inDoc globs)
 
-extractGlobals :: PDFDocument -> PDFGlobals
+extractGlobals :: PDFObjectTreeFlattened -> PDFGlobals
 extractGlobals _d = PDFGlobals {
     } where 
         myRoot = PDFString "todo: extract globals" -- error "todo: extract globals"
@@ -127,15 +133,10 @@ parseBBox :: [PDFObject] -> PDFBox
 parseBBox ((PDFInt a): ((PDFInt b): ((PDFInt c): ((PDFInt d): [])))) = Quad a b c d
 parseBBox _ = NullBox -- throw an error someday?
 
-flattenPageTree :: PDFDocumentExploded -> PDFObject -> [PDFObject]
-flattenPageTree (PDFDict catalogDict) _ = pageList where
-    root = case Map.lookup (PDFKey "Root") catalogDict of 
-        Just (PDFDict pageTree) -> case Map.lookup (PDFKey "Pages") pageTree of
-            Just r@(PDFDict rootOfTree) -> r
-            _ -> error "bad value in 'Pages' key to digestPageTree"
-        _ -> error "bad value in 'Root' key to digestPageTree"
-    pageList = flattenPageTree' root
+flattenPageTree :: PDFTreeExploded -> PDFObject -> [PDFObject]
+flattenPageTree root@(PDFDict catalogDict) _ = flattenPageTree' root
 flattenPageTree _ _ = error "page node is not a dictionary in flattenPageTree"
+
 -- takes a Page tree node that is either of Type "Page" or "Pages" and collapses
 -- it into an array of Pages
 -- TODO: test it on a non-flat page tree. Bummer, need to shift to ByteStreams,
@@ -149,28 +150,8 @@ flattenPageTree' obj@(PDFDict d)    = case Map.lookup (PDFKey "Type") d of
             _ -> error "wonky Pages node in Page Tree"
         listOfKids = concat (Prelude.map flattenPageTree' kidTrees) 
     Just (PDFSymbol "Page") -> [obj]
-    _ -> error "gak: neither Page nor Pages in digestPageTree'"
+    _ -> error ("gak: neither Page nor Pages in digestPageTree': " ++ (ppPDFObject 0 obj))
 flattenPageTree' x = [(PDFError "how did this get into digestPageTree")]
-
--- APRIL 2011 TODO: take a page array, and turn it into a proper page tree!!
-{-
-flattenDocument :: PDFDocumentParsed -> PDFDocument
-flattenDocument (PDFDocumentParsed p _g) = PDFDocument {
-        catalogDict = catalog,
-        objectList = objects'
-    } where
-        catalog = pageTreeNode parentRef PDFNull 
-        objects = Prelude.map flattenPage p
-        catalogObjectNumber = Map.size objects'
-        objects' = enMapify (objects ++ [parentRef])
-        parentRef = PDFReference catalogObjectNumber 0
-
--- we don't define parent here -- does that matter?
-flattenPage :: PDFPageParsed -> PDFObject
-flattenPage pp = PDFDict pageDict where
-    pageDict = (fromList pageDictList)
-    pageDictList = [(PDFKey "Fonts", PDFDict (fonts pp)), (PDFKey "Resources", PDFDict (resources pp)), (PDFKey "Contents", (contents pp))]
--}
 
 -- parsec functions
 run :: Show a => Parser a -> String -> IO ()
@@ -376,7 +357,7 @@ pdfArray = do
 -- Read the XRef table from the PDFContents. This table maps 
 --   integer object indices to the byte offset of the n'th PDF Object in the document
 getXRefTable :: PDFContents -> (Map ObjNum FileIndex, PDFObject) -- returns the trailer dict and the Root Object
-getXRefTable (PDFContents clx) = (readXRefTable 1 restStr'' numObjs Map.empty, rootObject) where
+getXRefTable (PDFContents clx) = (readXRefTable 1 restStr'' numObjs Map.empty, catalogDict) where
     (_, lastFewLines) = splitAt trailerGuess $ lines clx
     xrefOffset = findXRefOffset $ lastFewLines
     fileLen = length $ clx
@@ -389,10 +370,10 @@ getXRefTable (PDFContents clx) = (readXRefTable 1 restStr'' numObjs Map.empty, r
     (_skipZero, restStr) = parseNum skipXref 0
     (numObjs, restStr') = parseNum restStr 0
     restStr'' = skipLine restStr'
-    trailerGuess = 40
-    -- extract the trailer dict, and from that get the Document Catalog (aka Root)
+    trailerGuess = 15
+    -- extract the trailer dict, and from that get the Document Catalog 
     catalogStr = skipPast "trailer" lastFewLines -- sure there's a prelude equivalent... todo
-    rootObject = case (parse pdfObject "" (foldl (++) "" catalogStr)) of
+    catalogDict = case (parse pdfObject "" (foldl (++) "" catalogStr)) of
         Left err -> error ("malformed Trailer Dictionary *** " ++ (show catalogStr) ++ "ERR:" ++ (show err) ++ "***\n")
         Right (PDFDict d) -> PDFDict d
         Right obj -> error ("Incorrect trailer object type" ++ (show obj)) 

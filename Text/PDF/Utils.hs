@@ -20,8 +20,8 @@ import Data.Maybe
 
 import Text.PDF.Types
         
-traversePDFReference :: PDFObject -> PDFDocument -> PDFObject
-traversePDFReference (PDFReference objNum _g) (PDFDocument _ objMap ) = 
+traversePDFReference :: PDFObject -> PDFObjectTreeFlattened -> PDFObject
+traversePDFReference (PDFReference objNum _g) (PDFObjectTreeFlattened _ objMap ) = 
     fromMaybe (PDFError ("Unable to find object " ++ (show objNum))) (Map.lookup objNum objMap)
 traversePDFReference _ _ = error "Bad arguments to traversePDFReference"
     
@@ -72,10 +72,10 @@ indent :: Int -> String
 indent n = concat $ replicate n "    " 
 
 
-joinPDFDocument :: PDFDocument -> PDFDocument -> PDFDocument
+joinPDFDocument :: PDFObjectTreeFlattened -> PDFObjectTreeFlattened -> PDFObjectTreeFlattened
 joinPDFDocument = undefined
 
-filterPages :: (PDFObject -> Bool) -> PDFDocument -> PDFDocument
+filterPages :: (PDFObject -> Bool) -> PDFObjectTreeFlattened -> PDFObjectTreeFlattened
 filterPages = undefined
 
 {-
