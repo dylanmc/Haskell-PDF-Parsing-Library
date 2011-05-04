@@ -93,8 +93,8 @@ enMapify nextKey [first:rest] = enMapify (nextKey+1) rest (insert nextKey first 
 
 digestDocument :: PDFTreeExploded -> PDFDocumentParsed
 digestDocument inDoc = PDFDocumentParsed {
-        pageList = pages,
-        globals = globs
+        pageList = pages
+        -- , globals = globs
     } where
         globs = undefined -- extractGlobals inDoc
         pages = Prelude.map parsePage (flattenPageTree inDoc globs)
@@ -106,7 +106,6 @@ extractGlobals _d = PDFGlobals {
 
 parsePage :: PDFObject -> PDFPageParsed
 parsePage (PDFDict pageDict) = PDFPageParsed {
-        -- fonts     = fontsDict, -- XXX gone because fonts are in rsrc. it's confusing to duplicate
         resources = resourcesDict,
         contents  = cstream,
         mediaBox  = mediab,
@@ -150,7 +149,11 @@ flattenPageTree' obj@(PDFDict d)    = case Map.lookup (PDFKey "Type") d of
             _ -> error "wonky Pages node in Page Tree"
         listOfKids = concat (Prelude.map flattenPageTree' kidTrees) 
     Just (PDFSymbol "Page") -> [obj]
-    _ -> error ("gak: neither Page nor Pages in digestPageTree': " ++ (ppPDFObject 0 obj))
+    Just (PDFSymbol "Catalog") -> flattenedTree where
+        flattenedTree = case Map.lookup (PDFKey "Pages") d of
+            Just dict@(PDFDict _id) -> flattenPageTree' dict
+            _ -> error "bad missing /Pages key in catalog dict"
+    _ -> error ("gak: neither Page nor Pages in flattenPageTree': " ++ (ppPDFObject 0 obj))
 flattenPageTree' x = [(PDFError "how did this get into digestPageTree")]
 
 -- parsec functions

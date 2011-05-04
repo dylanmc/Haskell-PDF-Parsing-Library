@@ -37,8 +37,8 @@ data PDFObjectTreeFlattened =
 
 data PDFDocumentParsed = 
     PDFDocumentParsed {
-        pageList :: PDFPageList, -- later PDFPageList
-        globals  :: PDFGlobals
+        pageList :: PDFPageList
+        -- , globals  :: PDFGlobals
     } deriving (Show)
 
 data PDFGlobals = 

@@ -25,7 +25,8 @@ flag new-base
 library
  Exposed-modules: Text.PDF.Types,
                   Text.PDF.Document,
-                  Text.PDF.Utils
+                  Text.PDF.Utils,
+                  Text.PDF.Transformations
  Ghc-Options:     -Wall
 
  build-depends: base, parsec, containers, array, mtl

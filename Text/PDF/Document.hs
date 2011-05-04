@@ -29,7 +29,8 @@ newPage :: PDFObject -> PDFBox -> PDFDictionaryMap -> PDFPageParsed
 newPage stream mbox rscDict = PDFPageParsed {
         contents = stream,
         resources = rscDict,
-        mediaBox = mbox
+        mediaBox = mbox,
+        cropBox = mbox
     }
 
 -- appendPage pageTree newPage returns a new Page Tree with newPage appended to the end
@@ -46,7 +47,14 @@ deletePage _ _ = undefined
 insertPage :: PDFObject -> Int -> PDFObject -> PDFObject
 insertPage _ _ _ = undefined
 
+catalogDictFromArray :: [PDFObject] -> PDFObject
+catalogDictFromArray objs = 
+    (PDFDict (fromList [
+        ((PDFKey "Type"), (PDFSymbol "Catalog")),
+        ((PDFKey "Pages"), pageTreeFromArray objs) ]))
+        
 -- build a simple page tree from an array of page object references
+-- TODO: build a tree with > depth 1 for big documents. Where's the guidance on this?
 pageTreeFromArray :: [PDFObject] -> PDFObject
 pageTreeFromArray arr = 
     (PDFDict (fromList[
@@ -54,17 +62,18 @@ pageTreeFromArray arr =
         ((PDFKey "Count"), (PDFInt (length arr))),
         ((PDFKey "Kids"), (PDFArray arr))
     ]))
+    
+unParsePage :: PDFPageParsed -> PDFObject
+unParsePage parsedPage = (PDFDict (fromList [
+    ((PDFKey "Type"), PDFSymbol "Page"),
+    ((PDFKey "Resources"), PDFDict (resources parsedPage)),
+    ((PDFKey "Contents"), contents parsedPage),
+    ((PDFKey "MediaBox"), boxToPDFObject (mediaBox parsedPage)),
+    ((PDFKey "CropBox"),  boxToPDFObject (cropBox parsedPage))]))
 
-flattenPage :: PDFPageParsed -> PDFObject -> PDFObject
-flattenPage page parentRef = (PDFDict (fromList[
-        ((PDFKey "Parent"), parentRef), 
-        ((PDFKey "Contents"), (contents page)),
-        ((PDFKey "Resources"), (PDFDict (resources page))), -- HRMM: fonts belong inside here. 
-        ((PDFKey "Type"), (PDFSymbol "Page")),
-        ((PDFKey "MediaBox"), boxToPDFObject (mediaBox page))
-        -- TODO, don't even want the BBox keys for null boxes (cropbox, etc)
-    ]))
-
+unDigestDocument :: PDFDocumentParsed -> PDFTreeExploded
+unDigestDocument inDoc@(PDFDocumentParsed parsedPageList {- globals -} ) = (catalogDictFromArray pageArray) where
+    (PDFArray pageArray) = PDFArray (Prelude.map unParsePage parsedPageList)
 
 boxToPDFObject :: PDFBox -> PDFObject
 boxToPDFObject (Quad a b c d) = PDFArray [(PDFInt a),(PDFInt b),(PDFInt c),(PDFInt d)]
@@ -95,7 +104,7 @@ showPDFObject (PDFPageRaw obj) = (showPDFObject obj)
 showPDFObject (PDFError str) = (show str)
 showPDFObject (PDFComment str) = "%" ++ (show str)
 showPDFObject (PDFXObject _) = ("pdfxobject ??")
-showPDFObject _ = undefined "can't showPDFObject a non PDFString object (yet)"
+showPDFObject _ = error "can't showPDFObject a non PDFString object (yet)"
 
 showKeyObject :: PDFKey -> PDFObject -> String -> String
 showKeyObject (PDFKey key) obj initString = initString ++ 
@@ -126,12 +135,11 @@ addFontToDict name shortcut oldDict =
 type PDF = State.State PDFState
 data PDFState = 
     PDFState {
-        masterDocument :: PDFObjectTreeFlattened,
-        streamAccum :: PDFObject, 
-        rsrcDict :: PDFObject, 
-        fontsDict :: PDFObject,
-        pagesArray :: [PDFPageParsed]
-        -- pageTreeElt :: PDFObject -- the current node in the page tree
+        -- masterDocument :: PDFObjectTreeFlattened,
+        streamAccum   :: PDFObject, 
+        rsrcDict      :: PDFObject, 
+        fontsDict     :: PDFObject,
+        pagesArray    :: [PDFPageParsed]
     }
     
 -- a wrapper for put to make my silly mistakes result in sensible errors (thanks, sof!)
@@ -145,10 +153,13 @@ putPDF s = State.put s
 --   still a bit mysterious, but I think I can handle it.  The rest of the
 --   is either monadic, which makes sense, or pure, which makes more sense.
 -- It's still this bridge code that throws me a bit.
-rundoc :: PDF () -> PDFObjectTreeFlattened
+rundoc :: PDF () -> PDFDocumentParsed
 rundoc m = d where
     myState = State.execState m newPDFState
-    d = masterDocument myState
+    d = PDFDocumentParsed {
+        pageList = pagesArray myState
+        -- , globals = error "undefined globals"
+    }
 
 appendStream :: PDFObject -> String -> PDFObject
 appendStream (PDFStream s) ns = PDFStream (s ++ ns)
@@ -156,7 +167,6 @@ appendStream _ _ = PDFError "Non-stream argument to appendStream"
 
 newPDFState :: PDFState
 newPDFState = PDFState {
-        masterDocument = doc,
         streamAccum = PDFStream "",
         rsrcDict = PDFDict (fromList []),
         fontsDict = PDFDict (fromList []),
@@ -194,10 +204,43 @@ endPage = do
     putPDF (myState') 
 
 endDocument :: PDF ()
-endDocument = do
+endDocument = do 
+    silly <- State.get
+    putPDF silly
+    
+-- hrm - used to flatten things here, but let's have the document
+ -- monad leave things in a PDFDocumentParsed, which needs no cleanup
+{-do
     myState <- State.get
     let doc' = buildPageTree (masterDocument myState) (pagesArray myState)
     putPDF (myState { masterDocument = doc' })
+    -}
+
+-- Now for a bunch of imaging operations.
+moveTo :: Int -> Int -> PDF ()
+moveTo x y = do
+    -- (od, PDFStream os, dict, pgs) <- State.get
+    myState <- State.get
+    let ns = appendStream (streamAccum myState) (" " ++ (show x) ++ 
+            " " ++ (show y) ++ " Td ")
+    putPDF (myState {streamAccum = ns})
+
+printString :: String -> PDF ()
+printString s = do
+    myState <- State.get
+    let ns = appendStream (streamAccum myState) ("(" ++ s ++ ") Tj")
+    putPDF (myState {streamAccum = ns})
+
+setFont :: String -> String -> Int -> PDF ()
+setFont name shortcut fontSize = do
+    myState <- State.get
+    let s' = appendStream (streamAccum myState) ("/" ++ shortcut ++ " " ++ (show fontSize) ++ " Tf")
+    let fonts' = addFontToDict name shortcut (fontsDict myState)
+    let myState' = myState {
+        streamAccum = s',
+        fontsDict = fonts'
+    }
+    State.put (myState') 
 
 
 globalProcSet :: PDFObject    
@@ -205,10 +248,11 @@ globalProcSet = PDFArray [(PDFSymbol "PDF"), (PDFSymbol "Text") ]
 
 globalPageBox = Quad 0 0 300 300
 
--- buildPageTree takes a PDFObjectTreeFlattened and an array of PDFPageParsed objects
+-- buildPageTree takes a PDFObjectTreeFlattened and an array of PDFObjects (which are page dicts)
 -- returns a new PDFObjectTreeFlattened with a page tree added
 --   we modify the PDFPage objects to set their parent values to the newly created parent node(s)
-buildPageTree :: PDFObjectTreeFlattened -> [PDFPageParsed] -> PDFObjectTreeFlattened
+{- dead code???
+buildPageTree :: PDFObjectTreeFlattened -> [PDFObject] -> PDFObjectTreeFlattened
 buildPageTree doc pgArray = doc'''' where
     (newPagesArray, doc') = buildArrayOfRefs pgArray parentRef doc
     (parentRef, doc'') = addDocObjectGetRef (pageTreeFromArray newPagesArray) doc'
@@ -221,13 +265,13 @@ buildPageTree doc pgArray = doc'''' where
 -- takes an array of Page objects, a parent reference, and a PDFObjectTreeFlattened
 -- sets the parent of each page object to the parent ref, inserts that modified object 
 --    into the document, and returns the array of refs along with the new document
-buildArrayOfRefs :: [PDFPageParsed] -> PDFObject -> PDFObjectTreeFlattened -> ([PDFObject], PDFObjectTreeFlattened)
+buildArrayOfRefs :: [PDFObject] -> PDFObject -> PDFObjectTreeFlattened -> ([PDFObject], PDFObjectTreeFlattened)
 buildArrayOfRefs [] _ doc = ([], doc)
 buildArrayOfRefs (node : rest) parentRef doc = ((nodeRef : restRefs), doc'') where
     (nodeRef, doc') = addDocObjectGetRef newNode doc
-    newNode = flattenPage node parentRef
+    newNode = addParent node parentRef
     (restRefs, doc'') = buildArrayOfRefs rest parentRef doc'
-
+-} 
 -- 
 -- The spec says complex objects (arrays, dicts) can either have refs or objects inside them
 -- regularize turns everything that's not a simple atomic object into a reference.
@@ -260,6 +304,7 @@ enPointerify parent node@(PDFDict objs) = do
     let objs'' = case (isPageTreeNode node) of
                     True -> addParentPointer objs' parent
                     False -> objs'
+                    -- False -> (Map.insert (PDFKey "NOTPARENT") (PDFString (show node)) objs')
     clobberReference (PDFDict objs'') myReference
 
 -- ok, this is wack: if I don't "enpointerify" streams, it's not a valid PDF.
@@ -280,7 +325,12 @@ isPageTreeNode _ = False
 
 addParentPointer :: PDFDictionaryMap -> PDFObject -> PDFDictionaryMap
 addParentPointer inDict PDFNull = inDict
+-- addParentPointer inDict PDFNull = (Map.insert (PDFKey "NULL PARENT") PDFNull inDict)
 addParentPointer inDict parentPtr = (Map.insert (PDFKey "Parent") parentPtr inDict)
+
+
+addParent :: PDFObject -> PDFObject -> PDFObject
+addParent pd@(PDFDict _pd) parentRef = addToDict pd "Parent" parentRef
 
 reference :: PDFObject -> UnNest PDFObject
 reference obj = do
@@ -315,32 +365,6 @@ enpointerifyRoot :: PDFObjectTreeFlattened -> PDFObjectTreeFlattened
 enpointerifyRoot (PDFObjectTreeFlattened rootDict oldMap) = (PDFObjectTreeFlattened dictRef newMap) where
     (newMap, dictRef) = addObjectGetRef oldMap rootDict
     
--- Now for a bunch of imaging operations.
-moveTo :: Int -> Int -> PDF ()
-moveTo x y = do
-    -- (od, PDFStream os, dict, pgs) <- State.get
-    myState <- State.get
-    let ns = appendStream (streamAccum myState) (" " ++ (show x) ++ 
-            " " ++ (show y) ++ " Td ")
-    putPDF (myState {streamAccum = ns})
-
-printString :: String -> PDF ()
-printString s = do
-    myState <- State.get
-    let ns = appendStream (streamAccum myState) ("(" ++ s ++ ") Tj")
-    putPDF (myState {streamAccum = ns})
-
-setFont :: String -> String -> Int -> PDF ()
-setFont name shortcut fontSize = do
-    myState <- State.get
-    let s' = appendStream (streamAccum myState) ("/" ++ shortcut ++ " " ++ (show fontSize) ++ " Tf")
-    let fonts' = addFontToDict name shortcut (fontsDict myState)
-    let myState' = myState {
-        streamAccum = s',
-        fontsDict = fonts'
-    }
-    State.put (myState') 
-
 data ObjectIndices = ObjectIndices [Int] deriving (Show)
 
 -- print the first line, and kick off printing the big "list of objects"
