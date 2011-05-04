@@ -1,0 +1,9 @@
+This is not ready for anything like prime time.
+
+Things to do before it's ready for Hackage:
+- Support binary data (Trevor mentioned attoParsec)
+- Comment / Haddock the main functions
+- Add some Hunit or QuickCheck testing
+- Add some utility functions to make the watermarking implementation cleaner (font selection, dictionary manipulation, etc)
+- I'm sure I've done silly stuff wrt. not using Prelude functions, or even re-writing my own functions multiple times
+- Stuff I don't even know I don't know
