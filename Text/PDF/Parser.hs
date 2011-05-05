@@ -19,13 +19,10 @@ import Text.ParserCombinators.Parsec
 import Data.Map as Map
 import Data.Char as Char
 import Data.Array as Array
--- import Data.Maybe
 
 import Text.PDF.Types hiding ( catalogDict )
 import qualified Text.PDF.Types as T ( catalogDict )
 import Text.PDF.Utils
-
--- import Debug.Trace
 
 type ObjNum = Int
 type FileIndex = Int
@@ -39,10 +36,19 @@ data PDFContents = PDFContents String deriving (Show)
 --  * starting with the catalog dict (pointed to by /Root in the trailer dictionary), 
 --    recurse through complex objects, parsing sub- and refered-to sub-objects
 -- This results in a big tree of objects, no pointers, ready for digesting, manipulating, or flattening.
--- Digesting a PDF file goes like this:
---  * use the trailer dictionary to find and parse the page tree
+-- I'm calling this big tree a PDFObjectTreeFlattened
+-- Next, the function explodePDF traverses all the references in the tree to make a nested object tree
+--   with no "pointers" I call this structure a PDFTreeExploded
+-- Finally, digestDocument goes like this:
 --  * use the page tree to build a list of pages
---  * for each page, parse it into a PDFPage structure
+--  * parse each page into a PDFPageParsed structure
+-- the resulting structure is a PDFDocumentParsed. Most PDF manipulation functions will want to use this
+
+-- | @parseContents c@ parses a PDF file inside of @c@ and produces a PDFObjectTreeFlattened,
+-- which is the lowest of the three-levels of parsed-ness. At this level, there is an objectList,
+-- which is a map from Int to PDFObject, and there is a catalog dictionary, which is the root of the
+-- document. Objects in this form aren't nested, but instead have pointers, which are accessed by
+-- their index in the objectList.
 
 parseContents :: PDFContents -> PDFObjectTreeFlattened
 parseContents pdfContents = PDFObjectTreeFlattened {
@@ -62,8 +68,25 @@ parseContents pdfContents = PDFObjectTreeFlattened {
             Just er -> error ("bad value for Root object in catalog dictionary" ++ (show er))
             _ -> error ("no Root key/value in catalog dictionary: " ++ (show trailerDict))
 
+-- | @explodePDF otf@ recursively traverses the references in @otf@, and creates a nested PDFObject tree
+-- struture with no pointers.
 explodePDF :: PDFObjectTreeFlattened -> PDFTreeExploded
 explodePDF (PDFObjectTreeFlattened rootObject objects) = (recursivelyParse objects rootObject)
+
+-- | @digestDocument expl@ produces a list of PDFPageParsed by parsing the Page-specific resources out
+-- of the generic dictionaries in the PDF page tree in @expl@. This is the version of the parsed-ness most
+-- amenable to manipulation.
+-- 
+-- TODO: there can be dictionaries at middle levels of the page tree. These are effectively globals.
+-- While they're rare to use in practice, they need to be dealt with.
+
+digestDocument :: PDFTreeExploded -> PDFDocumentParsed
+digestDocument inDoc = PDFDocumentParsed {
+        pageList = pages
+        -- , globals = globs
+    } where
+        globs = undefined -- extractGlobals inDoc
+        pages = Prelude.map parsePage (flattenPageTree inDoc globs)
 
 enMapify :: [a] -> Map Int a
 enMapify objList = fromList (zip [1..(length objList)] objList)
@@ -87,18 +110,6 @@ recursivelyParse objectMap (PDFArray a) =  (PDFArray (Prelude.map (recursivelyPa
     
 -- any remaining ones better not be recursively defined, because:
 recursivelyParse _ o = o
-
-{-enMapify :: Int -> [a] -> Map Int a -> Map Int a
-enMapify _ [] inMap = inMap
-enMapify nextKey [first:rest] = enMapify (nextKey+1) rest (insert nextKey first inMap) -}
-
-digestDocument :: PDFTreeExploded -> PDFDocumentParsed
-digestDocument inDoc = PDFDocumentParsed {
-        pageList = pages
-        -- , globals = globs
-    } where
-        globs = undefined -- extractGlobals inDoc
-        pages = Prelude.map parsePage (flattenPageTree inDoc globs)
 
 extractGlobals :: PDFObjectTreeFlattened -> PDFGlobals
 extractGlobals _d = PDFGlobals {

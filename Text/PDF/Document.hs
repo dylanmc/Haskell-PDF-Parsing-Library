@@ -25,6 +25,24 @@ import Data.Maybe
 header14 :: String
 header14 = "%PDF-1.4\n"
 
+-- | @unDigestDocument dp@ takes a parsed document and turns all of the parsed objects into generic
+-- objects. Most particularly, PDFPageParsed into PDFDict's by inserting the salient page attributes
+-- into their stylized key/value pairs (like Contents, MediaBox, etc.)
+unDigestDocument :: PDFDocumentParsed -> PDFTreeExploded
+unDigestDocument (PDFDocumentParsed parsedPageList {- globals -} ) = (catalogDictFromArray pageArray) where
+    (PDFArray pageArray) = PDFArray (Prelude.map unParsePage parsedPageList)
+
+-- | @flattenDocument treeObj@ takes @treeObj@, a nested representation of a PDF document tree, and 
+-- flattens it by replacing nesting with PDF references to an object list it accumulates as it goes.
+-- In theory, the exploded tree is "very close" to a valid PDF structure, because nesting is 
+-- okay according to the spec. However, flattening objects gives us the opportunity to discover
+-- identical items and collapse them, and also, for some crazy reason, PDFStreams have to be 
+-- referenced inside of a page - they can't be nested.
+
+flattenDocument :: PDFObject -> PDFObjectTreeFlattened
+flattenDocument root = (PDFObjectTreeFlattened newRoot unNestState) where
+    (newRoot, unNestState) = State.runState (traverseAndUnNest root) Map.empty
+
 newPage :: PDFObject -> PDFBox -> PDFDictionaryMap -> PDFPageParsed
 newPage stream mbox rscDict = PDFPageParsed {
         contents = stream,
@@ -32,6 +50,16 @@ newPage stream mbox rscDict = PDFPageParsed {
         mediaBox = mbox,
         cropBox = mbox
     }
+
+-- | @printFlatTree file objectTree@ is the pretty printer that actually produces valid PDF
+-- from @objectTree@ on to the file handle @file@ (when we're lucky)
+printFlatTree :: Handle -> PDFObjectTreeFlattened -> IO PDFObjectTreeFlattened
+printFlatTree h d@(PDFObjectTreeFlattened _ _) = do
+    let prefixLen = length header14
+    hPutStr h (header14)
+    let d' = enpointerifyRoot d
+    ret <- printFlatTree' h d' (ObjectIndices []) prefixLen 1
+    return ret
 
 -- appendPage pageTree newPage returns a new Page Tree with newPage appended to the end
 appendPage :: PDFObject -> PDFObject -> PDFObject
@@ -70,10 +98,6 @@ unParsePage parsedPage = (PDFDict (fromList [
     ((PDFKey "Contents"), contents parsedPage),
     ((PDFKey "MediaBox"), boxToPDFObject (mediaBox parsedPage)),
     ((PDFKey "CropBox"),  boxToPDFObject (cropBox parsedPage))]))
-
-unDigestDocument :: PDFDocumentParsed -> PDFTreeExploded
-unDigestDocument (PDFDocumentParsed parsedPageList {- globals -} ) = (catalogDictFromArray pageArray) where
-    (PDFArray pageArray) = PDFArray (Prelude.map unParsePage parsedPageList)
 
 boxToPDFObject :: PDFBox -> PDFObject
 boxToPDFObject (Quad a b c d) = PDFArray [(PDFInt a),(PDFInt b),(PDFInt c),(PDFInt d)]
@@ -248,38 +272,6 @@ globalProcSet = PDFArray [(PDFSymbol "PDF"), (PDFSymbol "Text") ]
 globalPageBox :: PDFBox
 globalPageBox = Quad 0 0 300 300
 
--- buildPageTree takes a PDFObjectTreeFlattened and an array of PDFObjects (which are page dicts)
--- returns a new PDFObjectTreeFlattened with a page tree added
---   we modify the PDFPage objects to set their parent values to the newly created parent node(s)
-{- dead code???
-buildPageTree :: PDFObjectTreeFlattened -> [PDFObject] -> PDFObjectTreeFlattened
-buildPageTree doc pgArray = doc'''' where
-    (newPagesArray, doc') = buildArrayOfRefs pgArray parentRef doc
-    (parentRef, doc'') = addDocObjectGetRef (pageTreeFromArray newPagesArray) doc'
-    (_pagesArrayRef, doc''') = addDocObjectGetRef (PDFArray newPagesArray) doc''
-    doc'''' = doc''' { 
-        catalogDict = pageTreeNode parentRef PDFNull 
-        -- addObjectGetRef :: PDFObjectMap -> PDFObject -> (PDFObjectMap, PDFObject)
-    }
-
--- takes an array of Page objects, a parent reference, and a PDFObjectTreeFlattened
--- sets the parent of each page object to the parent ref, inserts that modified object 
---    into the document, and returns the array of refs along with the new document
-buildArrayOfRefs :: [PDFObject] -> PDFObject -> PDFObjectTreeFlattened -> ([PDFObject], PDFObjectTreeFlattened)
-buildArrayOfRefs [] _ doc = ([], doc)
-buildArrayOfRefs (node : rest) parentRef doc = ((nodeRef : restRefs), doc'') where
-    (nodeRef, doc') = addDocObjectGetRef newNode doc
-    newNode = addParent node parentRef
-    (restRefs, doc'') = buildArrayOfRefs rest parentRef doc'
--} 
--- 
--- The spec says complex objects (arrays, dicts) can either have refs or objects inside them
--- regularize turns everything that's not a simple atomic object into a reference.
--- 
-flattenDocument :: PDFObject -> PDFObjectTreeFlattened
-flattenDocument root = (PDFObjectTreeFlattened newRoot unNestState) where
-    (newRoot, unNestState) = State.runState (traverseAndUnNest root) Map.empty
-
 -- The state monad is helping us thread the accumulated ObjectMap through the flattening process
 -- without having to pass it all over the place.
 type UnNest = State.State PDFObjectMap
@@ -366,15 +358,6 @@ enpointerifyRoot (PDFObjectTreeFlattened rootDict oldMap) = (PDFObjectTreeFlatte
     (newMap, dictRef) = addObjectGetRef oldMap rootDict
     
 data ObjectIndices = ObjectIndices [Int] deriving (Show)
-
--- print the first line, and kick off printing the big "list of objects"
-printFlatTree :: Handle -> PDFObjectTreeFlattened -> IO PDFObjectTreeFlattened
-printFlatTree h d@(PDFObjectTreeFlattened _ _) = do
-    let prefixLen = length header14
-    hPutStr h (header14)
-    let d' = enpointerifyRoot d
-    ret <- printFlatTree' h d' (ObjectIndices []) prefixLen 1
-    return ret
 
 -- empties the PDFObjectList, printing each object as we go, adding
 -- its offset in the output file to "ObjectIndices"
