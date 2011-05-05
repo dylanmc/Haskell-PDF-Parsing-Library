@@ -18,7 +18,7 @@ import Data.Map as Map
 import Data.Array as Array
 import Data.Maybe 
 
-import Text.PDF.Types
+import Text.PDF.Types hiding ( dictMap )
         
 traversePDFReference :: PDFObject -> PDFObjectTreeFlattened -> PDFObject
 traversePDFReference (PDFReference objNum _g) (PDFObjectTreeFlattened _ objMap ) = 
@@ -50,8 +50,8 @@ ppPDFObject i (PDFDict m) = (indent i) ++ "Dict:\n" ++ (concat (Prelude.map (ppP
 
 ppPDFObject i (PDFArray a) = (indent i) ++ "[" ++ (concat (Prelude.map (ppPDFObject (i+1)) a)) ++ "]"
 
-ppPDFObject i (PDFSymbol s) = "/" ++ s ++ " "
-ppPDFObject i (PDFInt n) = (show n) ++ " "
+ppPDFObject _ (PDFSymbol s) = "/" ++ s ++ " "
+ppPDFObject _ (PDFInt n) = (show n) ++ " "
 
 ppPDFObject i o = (indent i) ++ (show o) ++ " "
 
