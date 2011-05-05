@@ -3,29 +3,36 @@ module Main(main) where
 import Text.PDF.Types
 import Text.PDF.Document
 import Text.PDF.Parser
-import Text.PDF.Utils
 import Text.PDF.Transformations
 import System.IO
 
 
--- run this, and you get a foo.pdf and a watermarked.pdf, which 
--- smoke-test a good fraction of the library
+-- Run this and you get a foo.pdf and a watermarked.pdf, which 
+-- smoke-test a good fraction of the library. TODO: some quickcheck and HUnit tests
  
 main :: IO ()
 main = do
     buildAndWriteFile "foo.pdf" 10
     watermarkFile "foo.pdf" "watermarked.pdf" watermarkPDF
+    reversePagesInFile "watermarked.pdf" "reversed.pdf"
 
-watermarkPDF :: [Char]
-watermarkPDF = "BT  100 50 Td /F1 12 Tf(Hello Watermark!) Tj ET"
-
+filterPDF :: (PDFDocumentParsed -> PDFDocumentParsed) -> PDFContents -> PDFObjectTreeFlattened
+filterPDF filterDocument cnts = flattenDocument (unDigestDocument (filterDocument (digestDocument (explodePDF (parseContents cnts)))))
+    
+reversePagesInFile :: String -> String -> IO ()
+reversePagesInFile inName outName = do
+    inString <- readFile inName
+    let filtered = filterPDF reversePages (PDFContents inString)
+    outFile <- openFile outName WriteMode
+    _ <- printFlatTree outFile filtered
+    hClose outFile
+    
 buildAndWriteFile :: String -> Int -> IO ()
 buildAndWriteFile outName numPages = do
     let firstDoc = (buildDoc numPages)
-    let undigested = unDigestDocument firstDoc
-    let d@(PDFObjectTreeFlattened dict objList) = flattenDocument undigested
+    let flattened = flattenDocument (unDigestDocument firstDoc)
     outFile <- openFile outName WriteMode
-    _ <- printFlatTree outFile d
+    _ <- printFlatTree outFile flattened
     hClose outFile
     return ()    
 
@@ -42,18 +49,17 @@ buildDoc i = rundoc $ do
     mapM_ (buildPage "Hello World ") [1..i]
     endDocument
 
+-- This is cheating because it references "/F1", which is a name for a font
+-- I know the "foo.pdf" document uses. TODO: build a watermarking function
+-- that lets you choose your font, and adds it to the page's resources dictionary
+watermarkPDF :: [Char]
+watermarkPDF = "BT  100 50 Td /F1 12 Tf(Hello Watermark!) Tj ET"
+
 watermarkFile :: String -> String -> String -> IO ()
 watermarkFile inName outName watermarkString = do
     inString <- readFile inName
-    let fileContents = PDFContents inString
-    let parsed@(PDFObjectTreeFlattened root _) = parseContents fileContents
-    let exploded = explodePDF parsed
-    let digested = digestDocument exploded
-    let watermarked = watermarkDocument digested watermarkString 
-    let undigested = unDigestDocument watermarked
-    let flattened = flattenDocument undigested
+    let watermarked = filterPDF (watermarkDocument watermarkString) (PDFContents inString) 
     outFile <- openFile outName WriteMode
-    _ <- printFlatTree outFile flattened   
-    -- putStrLn ("watermarked: " ++ (ppPDFObject 0 undigested))
-    putStrLn ("after flattening:" ++ (show flattened))
+    _ <- printFlatTree outFile watermarked   
     hClose outFile
+

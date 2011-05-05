@@ -24,7 +24,7 @@ import Data.Maybe
 
 header14 :: String
 header14 = "%PDF-1.4\n"
-
+ 
 -- | @unDigestDocument dp@ takes a parsed document and turns all of the parsed objects into generic
 -- objects. Most particularly, PDFPageParsed into PDFDict's by inserting the salient page attributes
 -- into their stylized key/value pairs (like Contents, MediaBox, etc.)
@@ -230,14 +230,6 @@ endDocument :: PDF ()
 endDocument = do 
     silly <- State.get
     putPDF silly
-    
--- hrm - used to flatten things here, but let's have the document
- -- monad leave things in a PDFDocumentParsed, which needs no cleanup
-{-do
-    myState <- State.get
-    let doc' = buildPageTree (masterDocument myState) (pagesArray myState)
-    putPDF (myState { masterDocument = doc' })
-    -}
 
 -- Now for a bunch of imaging operations.
 moveTo :: Int -> Int -> PDF ()
@@ -300,7 +292,7 @@ enPointerify parent node@(PDFDict objs) = do
     clobberReference (PDFDict objs'') myReference
 
 -- ok, this is wack: if I don't "enpointerify" streams, it's not a valid PDF.
--- I'm having a hard time finding where this should be true in the spec. Sigh. that's
+-- I'm having a hard time finding where this is stated in the spec. Sigh. that's
 -- a day of my life I'd like back. :-/
 enPointerify _parent str@(PDFStream _) = do
     reference str

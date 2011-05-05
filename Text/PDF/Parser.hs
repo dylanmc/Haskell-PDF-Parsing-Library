@@ -131,6 +131,7 @@ parsePage (PDFDict pageDict) = PDFPageParsed {
             _ -> Map.empty -}
         cstream = case Map.lookup (PDFKey "Contents") pageDict of
             Just st@(PDFStream s) -> st
+            Just ar@(PDFArray a) -> ar
             _ -> emptyStream
         mediab = case Map.lookup (PDFKey "MediaBox") pageDict of
             Just (PDFArray list1) -> parseBBox list1
