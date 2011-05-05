@@ -21,7 +21,8 @@ import Data.Char as Char
 import Data.Array as Array
 -- import Data.Maybe
 
-import Text.PDF.Types
+import Text.PDF.Types hiding ( catalogDict )
+import qualified Text.PDF.Types as T ( catalogDict )
 import Text.PDF.Utils
 
 -- import Debug.Trace
@@ -45,7 +46,7 @@ data PDFContents = PDFContents String deriving (Show)
 
 parseContents :: PDFContents -> PDFObjectTreeFlattened
 parseContents pdfContents = PDFObjectTreeFlattened {
-        catalogDict = catalogObj,                        -- the root, extracted from the catalog
+        T.catalogDict = catalogObj,                        -- the root, extracted from the catalog
         objectList = parsedObjectMap                     -- objectNum -> PDFObject
     } where
         (xrefEntries, (PDFDict trailerDict)) = getXRefTable pdfContents
@@ -56,8 +57,8 @@ parseContents pdfContents = PDFObjectTreeFlattened {
             Left err -> error ("malformed top-level PDF object: *** " ++ objStr ++ "ERR:" ++ (show err) ++ "***\n")
             Right obj -> obj
         catalogObj = case (Map.lookup (PDFKey "Root") trailerDict) of
-            Just rr@(PDFReference n g) -> (parsedObjectMap Map.! n) 
-            Just rd@(PDFDict rdict) -> rd
+            Just (PDFReference n _) -> (parsedObjectMap Map.! n) 
+            Just rd@(PDFDict _) -> rd
             Just er -> error ("bad value for Root object in catalog dictionary" ++ (show er))
             _ -> error ("no Root key/value in catalog dictionary: " ++ (show trailerDict))
 
@@ -81,7 +82,7 @@ recursivelyParse objectMap (PDFDict d) =  (PDFDict (Map.map (recursivelyParse ob
     
 -- trevor says "you could use an exception transformer" here.
 recursivelyParse objectMap (PDFReference n _) = recursivelyParse objectMap (objectMap Map.! n) 
-recursivelyParse objectMap (PDFStream s) = (PDFStream s) -- though some funky PDFs could put the length as a reference
+recursivelyParse _         (PDFStream s) = (PDFStream s) -- though some funky PDFs could put the length as a reference
 recursivelyParse objectMap (PDFArray a) =  (PDFArray (Prelude.map (recursivelyParse objectMap) a))
     
 -- any remaining ones better not be recursively defined, because:
@@ -145,7 +146,7 @@ flattenPageTree' (PDFArray arr) = arr
 flattenPageTree' obj@(PDFDict d)    = case Map.lookup (PDFKey "Type") d of
     Just (PDFSymbol "Pages") -> listOfKids where
         kidTrees = case Map.lookup (PDFKey "Kids") d of 
-            Just arr@(PDFArray kidArray) -> kidArray
+            Just (PDFArray kidArray) -> kidArray
             _ -> error "wonky Pages node in Page Tree"
         listOfKids = concat (Prelude.map flattenPageTree' kidTrees) 
     Just (PDFSymbol "Page") -> [obj]
@@ -154,7 +155,7 @@ flattenPageTree' obj@(PDFDict d)    = case Map.lookup (PDFKey "Type") d of
             Just dict@(PDFDict _id) -> flattenPageTree' dict
             _ -> error "bad missing /Pages key in catalog dict"
     _ -> error ("gak: neither Page nor Pages in flattenPageTree': " ++ (ppPDFObject 0 obj))
-flattenPageTree' x = [(PDFError "how did this get into digestPageTree")]
+flattenPageTree' _ = [(PDFError "how did this get into digestPageTree")]
 
 -- parsec functions
 run :: Show a => Parser a -> String -> IO ()

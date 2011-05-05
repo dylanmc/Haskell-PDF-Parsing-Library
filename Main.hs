@@ -13,6 +13,7 @@ main :: IO ()
 -- main = parseAndWriteFile "foo.pdf" "bar.pdf" -- no transformation done, just tests parse and print
 main = watermarkFile "foo.pdf" "watermarked.pdf" watermarkPDF
 
+watermarkPDF :: [Char]
 watermarkPDF = "BT  100 50 Td /F1 12 Tf(Hello Watermark!) Tj ET"
 
 buildAndWriteFile :: String -> Int -> IO ()

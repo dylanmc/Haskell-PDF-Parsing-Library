@@ -16,7 +16,7 @@ module Text.PDF.Document where
 import Data.Map as Map
 import qualified Data.Traversable as T
 import qualified Control.Monad.State as State
-import Text.PDF.Types
+import Text.PDF.Types hiding ( parent, dictMap )
 import Text.PDF.Utils
 -- import Text.PDF.Parser
 import System.IO
@@ -35,7 +35,7 @@ newPage stream mbox rscDict = PDFPageParsed {
 
 -- appendPage pageTree newPage returns a new Page Tree with newPage appended to the end
 appendPage :: PDFObject -> PDFObject -> PDFObject
-appendPage (PDFArray a) newPage = PDFArray (a ++ [newPage])
+appendPage (PDFArray a) newPage' = PDFArray (a ++ [newPage'])
 appendPage x y = (PDFArray [(PDFError "BadCallToAppendPage with:"), x, y])
 -- eventually want to balance the tree of pages
 
@@ -72,7 +72,7 @@ unParsePage parsedPage = (PDFDict (fromList [
     ((PDFKey "CropBox"),  boxToPDFObject (cropBox parsedPage))]))
 
 unDigestDocument :: PDFDocumentParsed -> PDFTreeExploded
-unDigestDocument inDoc@(PDFDocumentParsed parsedPageList {- globals -} ) = (catalogDictFromArray pageArray) where
+unDigestDocument (PDFDocumentParsed parsedPageList {- globals -} ) = (catalogDictFromArray pageArray) where
     (PDFArray pageArray) = PDFArray (Prelude.map unParsePage parsedPageList)
 
 boxToPDFObject :: PDFBox -> PDFObject
@@ -86,7 +86,7 @@ showPDFObject (PDFString s) =  "(" ++ (escapeString s) ++ ")"
 showPDFObject (PDFSymbol s) =  "/" ++ s 
 
 showPDFObject (PDFDict m) =
-    "<<" ++ (foldWithKey showKeyObject "" m) ++ " >>"
+    "<<" ++ (foldrWithKey showKeyObject "" m) ++ " >>"
 
 showPDFObject (PDFFloat f) = (show f)
 showPDFObject (PDFInt i) = (show i)
@@ -171,8 +171,7 @@ newPDFState = PDFState {
         rsrcDict = PDFDict (fromList []),
         fontsDict = PDFDict (fromList []),
         pagesArray = []
-    } where
-        doc = (PDFObjectTreeFlattened PDFNull Map.empty )
+    }
 
 -- todo: I like putting the media box as an arg to beginPage. HMMMM.
 beginPage :: PDF ()
@@ -246,6 +245,7 @@ setFont name shortcut fontSize = do
 globalProcSet :: PDFObject    
 globalProcSet = PDFArray [(PDFSymbol "PDF"), (PDFSymbol "Text") ]
 
+globalPageBox :: PDFBox
 globalPageBox = Quad 0 0 300 300
 
 -- buildPageTree takes a PDFObjectTreeFlattened and an array of PDFObjects (which are page dicts)
@@ -291,7 +291,7 @@ traverseAndUnNest a = (enPointerify PDFNull) a
 
 enPointerify :: PDFObject -> PDFObject -> UnNest PDFObject
 
-enPointerify parent ia@(PDFArray objs) = do
+enPointerify parent (PDFArray objs) = do
     objs' <- mapM (enPointerify parent) objs -- could also use T.mapM here
     case (length objs > 4) of
         True -> do
@@ -310,7 +310,7 @@ enPointerify parent node@(PDFDict objs) = do
 -- ok, this is wack: if I don't "enpointerify" streams, it's not a valid PDF.
 -- I'm having a hard time finding where this should be true in the spec. Sigh. that's
 -- a day of my life I'd like back. :-/
-enPointerify parent str@(PDFStream s) = do
+enPointerify _parent str@(PDFStream _) = do
     reference str
     
 enPointerify _parent o = return o
@@ -340,10 +340,10 @@ reference obj = do
     return ref
 
 clobberReference :: PDFObject -> PDFObject -> UnNest PDFObject
-clobberReference object reference = do
+clobberReference object ref = do
     dict <- State.get
-    State.put (clobberObjectWithRef dict object reference)
-    return reference
+    State.put (clobberObjectWithRef dict object ref)
+    return ref
 
 addDocObjectGetRef :: PDFObject -> PDFObjectTreeFlattened -> (PDFObject, PDFObjectTreeFlattened)
 addDocObjectGetRef obj (PDFObjectTreeFlattened root oldMap) = (objRef, (PDFObjectTreeFlattened root newMap)) where
@@ -358,7 +358,7 @@ addObjectGetRef oldMap pdfobj = (newMap, newRef) where
     objNum = (Map.size oldMap + 1)
     
 clobberObjectWithRef :: PDFObjectMap -> PDFObject -> PDFObject -> PDFObjectMap
-clobberObjectWithRef oldMap newObject (PDFReference n g) = Map.insert n newObject oldMap
+clobberObjectWithRef oldMap newObject (PDFReference n _) = Map.insert n newObject oldMap
 clobberObjectWithRef _ _ _ = error ("internal error: bad args to clobberObjectWithRef")
 
 enpointerifyRoot :: PDFObjectTreeFlattened -> PDFObjectTreeFlattened
@@ -369,7 +369,7 @@ data ObjectIndices = ObjectIndices [Int] deriving (Show)
 
 -- print the first line, and kick off printing the big "list of objects"
 printFlatTree :: Handle -> PDFObjectTreeFlattened -> IO PDFObjectTreeFlattened
-printFlatTree h d@(PDFObjectTreeFlattened id om) = do
+printFlatTree h d@(PDFObjectTreeFlattened _ _) = do
     let prefixLen = length header14
     hPutStr h (header14)
     let d' = enpointerifyRoot d
