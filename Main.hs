@@ -7,11 +7,14 @@ import Text.PDF.Utils
 import Text.PDF.Transformations
 import System.IO
 
+
+-- run this, and you get a foo.pdf and a watermarked.pdf, which 
+-- smoke-test a good fraction of the library
  
 main :: IO ()
--- main = buildAndWriteFile "foo.pdf" 10
--- main = parseAndWriteFile "foo.pdf" "bar.pdf" -- no transformation done, just tests parse and print
-main = watermarkFile "foo.pdf" "watermarked.pdf" watermarkPDF
+main = do
+    buildAndWriteFile "foo.pdf" 10
+    watermarkFile "foo.pdf" "watermarked.pdf" watermarkPDF
 
 watermarkPDF :: [Char]
 watermarkPDF = "BT  100 50 Td /F1 12 Tf(Hello Watermark!) Tj ET"
@@ -39,23 +42,6 @@ buildDoc i = rundoc $ do
     mapM_ (buildPage "Hello World ") [1..i]
     endDocument
 
-parseAndWriteFile :: String -> String -> IO ()
-parseAndWriteFile inName outName = do
-    -- inFileHandle <- openFile inName ReadMode
-    inString <- readFile inName
-    let fileContents = PDFContents inString
-    let parsed@(PDFObjectTreeFlattened root _) = parseContents fileContents
-    let exploded = explodePDF parsed
-    let digested = digestDocument exploded
-    let flattened = flattenDocument exploded
-    outFile <- openFile outName WriteMode
-    _ <- printFlatTree outFile flattened   -- _ <- printFlatTree outFile parsed
-    hClose outFile
-    -- putStrLn ("before 'sploding: " ++ show root)
-    putStrLn ("after 'sploding:" ++  (ppPDFObject 0 exploded))
-    -- putStrLn ("after flattening:" ++ (show flattened))
-    --putStrLn ("\n\nafter digestion:" ++ (concat (map ppPDFPage (pageList dig))))
-    
 watermarkFile :: String -> String -> String -> IO ()
 watermarkFile inName outName watermarkString = do
     inString <- readFile inName
